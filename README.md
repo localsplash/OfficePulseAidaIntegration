@@ -1,6 +1,6 @@
-# HostedPulseAidaIntegration
+# OfficePulseAidaIntegration
 
-Layer Aida onto HostedPulse without forking or modifying Asterisk source.
+Layer Aida onto OfficePulse without forking or modifying Asterisk source.
 
 ## Responsibilities
 

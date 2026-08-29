@@ -1,0 +1,28 @@
+{
+  "prompts": [
+    {
+      "name": "aida-recording-disclosure",
+      "version": 1,
+      "format": "ulaw",
+      "sampleRateHz": 8000,
+      "sha256": null,
+      "sourceText": "This call may be recorded for quality and training purposes."
+    },
+    {
+      "name": "aida-circuits-busy",
+      "version": 1,
+      "format": "ulaw",
+      "sampleRateHz": 8000,
+      "sha256": null,
+      "sourceText": "All of our circuits are busy right now. Please hold while we connect you directly."
+    },
+    {
+      "name": "aida-agent-incident",
+      "version": 1,
+      "format": "ulaw",
+      "sampleRateHz": 8000,
+      "sha256": null,
+      "sourceText": "Heads up: the automated assistant is unavailable, so this call is coming to you directly."
+    }
+  ]
+}

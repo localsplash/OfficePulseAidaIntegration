@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.log
+.env
+.env.*
+prompts/audio/*.ulaw
+prompts/audio/*.alaw
+prompts/audio/*.sln
+prompts/audio/*.wav

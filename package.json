@@ -1,0 +1,33 @@
+{
+  "name": "officepulse-aida-integration",
+  "version": "0.1.0",
+  "description": "OfficePulse Aida integration service for LSAidaOffice01: FastAGI inbound bootstrap, ARI takeover/bridging, and Asterisk Realtime provisioning.",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "npm run typecheck",
+    "test": "node --import tsx --test \"test/**/*.test.ts\"",
+    "verify": "npm run typecheck && npm test",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "validate:prompts": "tsx src/prompts/validateCli.ts prompts/manifest.json prompts/audio",
+    "simulate:agi": "tsx simulators/fake-asterisk-agi.ts",
+    "simulate:ari": "tsx simulators/fake-ari-server.ts"
+  },
+  "dependencies": {
+    "mysql2": "^3.11.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.0",
+    "@types/ws": "^8.5.12",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.2"
+  }
+}

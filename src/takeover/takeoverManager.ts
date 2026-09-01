@@ -8,7 +8,6 @@ export const CHANVAR = {
   role: 'AIDA_ROLE',
   takeoverKey: 'AIDA_TAKEOVER_KEY',
   sipDestination: 'AIDA_SIP_DESTINATION',
-  routeToken: 'AIDA_ROUTE_TOKEN',
 } as const;
 
 export type TakeoverFailureReason = 'busy' | 'rejected' | 'no-answer' | 'failed';
@@ -156,9 +155,8 @@ export class TakeoverManager {
     const ari = this.opts.ari;
     session.linkedid = (await ari.getChannelVar(ev.channel.id, 'CHANNEL(linkedid)')) ?? undefined;
     const sipDestination = await ari.getChannelVar(ev.channel.id, CHANVAR.sipDestination);
-    const routeToken = await ari.getChannelVar(ev.channel.id, CHANVAR.routeToken);
-    if (!sipDestination || !routeToken) {
-      log.error('caller entered stasis without routing variables; hanging up to dialplan fallback');
+    if (!sipDestination) {
+      log.error('caller entered stasis without a SIP destination; hanging up to dialplan fallback');
       await this.safeAri(() => ari.hangup(ev.channel.id, 'congestion'));
       this.cleanupSession(session);
       return;
@@ -184,10 +182,15 @@ export class TakeoverManager {
       variables: {
         [CHANVAR.callSessionId]: callSessionId,
         [CHANVAR.role]: 'livekit',
-        // Header mapping: the LiveKit SIP trunk maps these X-Aida-*
-        // headers onto SIP participant attributes.
+        // Header mapping: the LiveKit SIP trunk maps this header onto a
+        // SIP participant attribute, so the agent can correlate its leg.
+        //
+        // No route token travels here any more (issue #9). It existed to
+        // prove AidaControl had authorized this leg for one room; this
+        // service now creates that room and dispatches the agent into it
+        // itself, over an authenticated server-side API, so a bearer token
+        // carried through SIP headers would add exposure, not assurance.
         'PJSIP_HEADER(add,X-Aida-Call-Session)': callSessionId,
-        'PJSIP_HEADER(add,X-Aida-Route-Token)': routeToken,
       },
     });
     session.livekitChannelId = livekit.id;
@@ -296,14 +299,14 @@ export class TakeoverManager {
     await this.emitEvent(session, 'bridged');
 
     // Local bounded drain: Aida gets at most drainTimeoutMs to wrap up;
-    // AidaControl can acknowledge earlier via acknowledgeDrain().
+    // A drain-ack command can complete it earlier.
     session.drainTimer = setTimeout(() => {
       session.drainTimer = undefined;
       void this.removeAida(session, 'drain-deadline');
     }, this.opts.drainTimeoutMs);
   }
 
-  /** AidaControl acknowledged the drain — remove Aida now. */
+  /** The drain was acknowledged — remove Aida now. */
   async acknowledgeDrain(callSessionId: string): Promise<{ status: string }> {
     const session = this.sessions.get(callSessionId);
     if (!session) throw new NotFoundError(`no session ${callSessionId}`);
@@ -368,9 +371,9 @@ export class TakeoverManager {
     if (ev.channel.id === session.livekitChannelId) {
       session.livekitChannelId = undefined;
       if (!session.humanAnswered) {
-        // Aida died mid-screening with no takeover done. AidaControl is
-        // told; it decides whether to command a takeover. The caller
-        // stays up (dialplan-level fallback only covers pre-Stasis).
+        // Aida died mid-screening with no takeover done. The event is
+        // recorded so an operator or handset can command a takeover. The
+        // caller stays up (dialplan fallback only covers pre-Stasis).
         this.log(session).warn('aida leg lost during screening');
         await this.emitEvent(session, 'aida-lost');
       }

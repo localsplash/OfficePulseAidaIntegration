@@ -149,6 +149,15 @@ export class FakeRealtimeStore implements RealtimeStore {
     return undefined;
   }
 
+  async findObjectAtLocation(context: string, exten: string): Promise<AidaObjectRow | undefined> {
+    for (const obj of this.objects.values()) {
+      // DID rows share the dialplan but occupy an E.164 slot, never an
+      // extension number, so they cannot collide with one.
+      if (obj.kind !== 'DID' && obj.context === context && obj.exten === exten) return obj;
+    }
+    return undefined;
+  }
+
   async getAidaDeviceByExtension(extensionExternalId: string): Promise<AidaDeviceRow | undefined> {
     for (const device of this.devices.values()) {
       if (device.extension_external_id === extensionExternalId) return device;

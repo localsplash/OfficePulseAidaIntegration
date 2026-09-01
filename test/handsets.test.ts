@@ -72,7 +72,15 @@ async function setup(): Promise<{
     pusherKey: 'pk_public',
     pusherCluster: 'mt1',
   });
-  return { handsets, extensions, adapter, store, lines, sipSecret: created.sipSecret, sipUsername: created.sipUsername };
+  return {
+    handsets,
+    extensions,
+    adapter,
+    store,
+    lines,
+    sipSecret: created.sipSecret as string,
+    sipUsername: created.sipUsername,
+  };
 }
 
 const INPUT = {
@@ -168,6 +176,7 @@ test('secret rotation reprovisions the enrolled device with the new secret', asy
   assert.equal(rotated.provisioningResult?.ok, true);
   assert.equal(adapter.sipCalls.length, 2);
   assert.equal(adapter.sipCalls[1]?.sipSecret, rotated.sipSecret);
+  assert.equal(rotated.status, 'rotated');
   assert.equal(adapter.sipCalls[1]?.provisioningMac, 'C074AD112233');
 });
 

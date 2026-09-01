@@ -29,9 +29,19 @@ export interface ExtensionCreateInput {
   provisioningProfile?: string;
 }
 
+/**
+ * `status` discriminates a real create from an idempotent replay.
+ *
+ * A replay deliberately carries NO `sipSecret`. The secret is generated
+ * once and shown once; re-serving it on every replay of a `requestId`
+ * would turn an at-least-once retry into an unbounded secret oracle. When
+ * AidaAdmin loses the original response the recovery is an explicit
+ * rotation, which is auditable — not a silent re-read.
+ */
 export interface ExtensionCreateResult {
+  status: 'created' | 'already-applied';
   sipUsername: string;
-  sipSecret: string;
+  sipSecret?: string;
 }
 
 export interface ExtensionUpdateInput {
@@ -50,7 +60,9 @@ export interface RotateSecretInput {
 }
 
 export interface RotateSecretResult {
-  sipSecret: string;
+  status: 'rotated' | 'already-applied';
+  /** Present only on a real rotation; never re-served on a replay. */
+  sipSecret?: string;
   provisioningResult?: { ok: boolean; detail?: string };
 }
 
@@ -103,11 +115,9 @@ export class ExtensionProvisioningService {
     const existing = await this.deps.store.getAidaObject('EXTENSION', extensionId);
     const priorRequest = await this.deps.store.getRequest(requestId);
     if (existing && priorRequest && priorRequest.external_id === extensionId && priorRequest.action === 'create') {
-      // Idempotent replay of the exact create that provisioned this
-      // extension: re-read the secret from its only storage location.
-      const auth = await this.deps.store.getAuth(existing.endpoint_id as string);
-      if (!auth) throw new ConflictError(`extension ${extensionId} exists but auth row is missing`);
-      return { sipUsername: auth.username, sipSecret: auth.password };
+      // Idempotent replay: confirm what was applied, without the secret.
+      // Recovering a lost response requires an explicit rotation.
+      return { status: 'already-applied', sipUsername: existing.endpoint_id as string };
     }
     if (existing) {
       throw new ConflictError(`extension ${extensionId} is already provisioned; existing secrets are never returned`);
@@ -115,9 +125,13 @@ export class ExtensionProvisioningService {
     if (priorRequest) {
       throw new ConflictError(`requestId ${requestId} was already used for a different operation`);
     }
-    const extenTaken = await this.deps.store.findExtensionObjectByExten(context, extensionNumber);
-    if (extenTaken) {
-      throw new ConflictError(`extension number ${extensionNumber} already exists in context ${context}`);
+    // Any object already at this location collides, not just an extension:
+    // a ring group's virtual extension occupies the same dialplan slot.
+    const occupant = await this.deps.store.findObjectAtLocation(context, extensionNumber);
+    if (occupant) {
+      throw new ConflictError(
+        `dialplan location ${context}/${extensionNumber} is already used by ${occupant.kind} ${occupant.external_id}`,
+      );
     }
 
     const sipUsername = sipUsernameFor(tenantId, extensionNumber);
@@ -151,7 +165,7 @@ export class ExtensionProvisioningService {
     });
 
     this.deps.logger.info('extension provisioned', { extensionId, context, extensionNumber });
-    return { sipUsername, sipSecret };
+    return { status: 'created', sipUsername, sipSecret };
   }
 
   async update(extensionIdRaw: string, raw: ExtensionUpdateInput): Promise<{ status: string }> {
@@ -170,6 +184,19 @@ export class ExtensionProvisioningService {
     const endpointId = existing.endpoint_id;
     const disabledContext = this.deps.disabledContext ?? 'aida-disabled';
     const callerid = formatCallerId(callerIdName ?? displayName, callerIdNumber);
+
+    // Moving an extension must not silently overwrite whatever already
+    // occupies the target location — including a ring group's virtual
+    // extension. Checked BEFORE any dialplan row is replaced.
+    const moving = existing.context !== context || existing.exten !== extensionNumber;
+    if (enabled && moving) {
+      const occupant = await this.deps.store.findObjectAtLocation(context, extensionNumber);
+      if (occupant && !(occupant.kind === 'EXTENSION' && occupant.external_id === extensionId)) {
+        throw new ConflictError(
+          `dialplan location ${context}/${extensionNumber} is already used by ${occupant.kind} ${occupant.external_id}`,
+        );
+      }
+    }
 
     await this.deps.store.withTransaction(async (tx) => {
       await tx.setEndpointFields(endpointId, { context: enabled ? context : disabledContext, callerid });
@@ -206,10 +233,10 @@ export class ExtensionProvisioningService {
     const priorRequest = await this.deps.store.getRequest(requestId);
     if (priorRequest) {
       if (priorRequest.external_id === extensionId && priorRequest.action === 'rotate-secret') {
-        // Replay of the same rotation: re-read from ps_auths.
-        const auth = await this.deps.store.getAuth(endpointId);
-        if (!auth) throw new ConflictError(`extension ${extensionId} auth row is missing`);
-        return { sipSecret: auth.password };
+        // Replay: the rotation already happened. The secret it produced is
+        // not re-served — a lost response is recovered by rotating again
+        // with a fresh requestId, which leaves an audit trail.
+        return { status: 'already-applied' };
       }
       throw new ConflictError(`requestId ${requestId} was already used for a different operation`);
     }
@@ -225,7 +252,7 @@ export class ExtensionProvisioningService {
     if (reprovisionDevice) {
       provisioningResult = await this.reprovisionDevice(extensionId, endpointId, sipSecret);
     }
-    return { sipSecret, provisioningResult };
+    return { status: 'rotated', sipSecret, provisioningResult };
   }
 
   private async reprovisionDevice(

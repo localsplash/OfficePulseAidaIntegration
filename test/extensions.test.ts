@@ -33,8 +33,9 @@ test('create writes exact ps_aors/ps_auths/ps_endpoints/extensions rows in one t
   const { service, store } = makeService();
   const result = await service.create(CREATE);
 
+  assert.equal(result.status, 'created');
   assert.match(result.sipUsername, /^100-[0-9a-f]{6}$/);
-  assert.equal(result.sipSecret.length >= 24, true);
+  assert.equal((result.sipSecret as string).length >= 24, true);
 
   const aor = store.aors.get(result.sipUsername);
   assert.deepEqual(aor, { id: result.sipUsername, max_contacts: 1, remove_existing: 'yes' });
@@ -69,12 +70,17 @@ test('create writes exact ps_aors/ps_auths/ps_endpoints/extensions rows in one t
   assert.equal(object?.enabled, 1);
 });
 
-test('replay of the same create requestId returns the same secret without new rows', async () => {
+test('replay of a create reports already-applied and never re-serves the secret', async () => {
   const { service, store } = makeService();
   const first = await service.create(CREATE);
   const replay = await service.create(CREATE);
-  assert.deepEqual(replay, first);
+  // Same extension, no new rows — and crucially no secret: recovering a
+  // lost response requires an explicit rotation.
+  assert.equal(replay.status, 'already-applied');
+  assert.equal(replay.sipUsername, first.sipUsername);
+  assert.equal(replay.sipSecret, undefined);
   assert.equal(store.auths.size, 1);
+  assert.equal(store.auths.get(first.sipUsername)?.password, first.sipSecret);
 });
 
 test('re-create with a different requestId conflicts and never returns the existing secret', async () => {
@@ -82,7 +88,7 @@ test('re-create with a different requestId conflicts and never returns the exist
   const created = await service.create(CREATE);
   await assert.rejects(service.create({ ...CREATE, requestId: 'req-2' }), (err: unknown) => {
     assert.ok(err instanceof ConflictError);
-    assert.ok(!(err as Error).message.includes(created.sipSecret), 'no secret material in the error');
+    assert.ok(!(err as Error).message.includes(created.sipSecret as string), 'no secret material in the error');
     return true;
   });
 });
@@ -123,11 +129,16 @@ test('rotation returns a fresh secret exactly once and updates only ps_auths', a
   const { service, store } = makeService();
   const created = await service.create(CREATE);
   const rotated = await service.rotateSecret(EXT_ID, { requestId: 'rot-1', reprovisionDevice: false });
+  assert.equal(rotated.status, 'rotated');
   assert.notEqual(rotated.sipSecret, created.sipSecret);
   assert.equal(store.auths.get(created.sipUsername)?.password, rotated.sipSecret);
-  // Replay returns the same rotated secret; a different requestId conflicts.
+
+  // A replay confirms the rotation happened but does NOT re-serve its
+  // secret; a different requestId for the same op still conflicts.
   const replay = await service.rotateSecret(EXT_ID, { requestId: 'rot-1', reprovisionDevice: false });
-  assert.equal(replay.sipSecret, rotated.sipSecret);
+  assert.equal(replay.status, 'already-applied');
+  assert.equal(replay.sipSecret, undefined);
+  assert.equal(store.auths.get(created.sipUsername)?.password, rotated.sipSecret, 'replay must not rotate again');
   await assert.rejects(service.rotateSecret(EXT_ID, { requestId: 'req-1', reprovisionDevice: false }), ConflictError);
 });
 
@@ -161,6 +172,6 @@ test('secrets never appear in provisioning logs', async () => {
   const created = await service.create(CREATE);
   const rotated = await service.rotateSecret(EXT_ID, { requestId: 'rot-1', reprovisionDevice: false });
   const joined = lines.join('\n');
-  assert.ok(!joined.includes(created.sipSecret));
-  assert.ok(!joined.includes(rotated.sipSecret));
+  assert.ok(!joined.includes(created.sipSecret as string));
+  assert.ok(!joined.includes(rotated.sipSecret as string));
 });

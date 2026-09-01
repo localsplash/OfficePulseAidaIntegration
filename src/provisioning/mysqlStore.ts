@@ -123,6 +123,14 @@ export class MysqlRealtimeStore implements RealtimeStore {
     return (rows as AidaObjectRow[])[0];
   }
 
+  async findObjectAtLocation(context: string, exten: string): Promise<AidaObjectRow | undefined> {
+    const [rows] = await this.pool.execute(
+      'SELECT kind, external_id, tenant_id, context, exten, endpoint_id, enabled FROM aida_object WHERE context = ? AND exten = ?',
+      [context, exten],
+    );
+    return (rows as AidaObjectRow[])[0];
+  }
+
   async getAidaDeviceByExtension(extensionExternalId: string): Promise<AidaDeviceRow | undefined> {
     const [rows] = await this.pool.execute(
       'SELECT device_id, extension_external_id, provisioning_mac, provisioning_profile FROM aida_device WHERE extension_external_id = ?',

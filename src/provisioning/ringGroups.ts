@@ -1,5 +1,5 @@
 import type { Logger } from '../logging/logger.js';
-import { ValidationError } from '../errors.js';
+import { ConflictError, ValidationError } from '../errors.js';
 import type { DialplanRow, RealtimeStore } from './store.js';
 import {
   intInRange,
@@ -42,11 +42,18 @@ export function ringGroupDialplanRows(
   ringTimeoutSeconds: number,
   musicOnHoldClass: string | undefined,
   callerIdName: string | undefined,
+  callerIdNumber: string | undefined,
 ): DialplanRow[] {
   const rows: DialplanRow[] = [{ priority: 1, app: 'NoOp', appdata: `aida-ring-group ${ringGroupId}` }];
   let priority = 2;
+  // Both halves of the presented Caller ID are applied. Setting only the
+  // name leaves the caller's own number on the members' screens, which
+  // makes a ring group indistinguishable from a direct call.
   if (callerIdName !== undefined) {
     rows.push({ priority: priority++, app: 'Set', appdata: `CALLERID(name)=${callerIdName}` });
+  }
+  if (callerIdNumber !== undefined) {
+    rows.push({ priority: priority++, app: 'Set', appdata: `CALLERID(num)=${callerIdNumber}` });
   }
   const dialString = memberEndpointIds.map((id) => `PJSIP/${id}`).join('&');
   const options = musicOnHoldClass !== undefined ? `,m(${musicOnHoldClass})` : '';
@@ -67,7 +74,7 @@ export class RingGroupProvisioningService {
     const ringTimeoutSeconds = intInRange(raw.ringTimeoutSeconds, 'ringTimeoutSeconds', 20, 5, 120, problems);
     const musicOnHoldClass = optionalProfile(raw.musicOnHoldClass, 'musicOnHoldClass', problems);
     const callerIdName = optionalCallerIdName(raw.callerIdName, 'callerIdName', problems);
-    optionalE164(raw.callerIdNumber, 'callerIdNumber', problems);
+    const callerIdNumber = optionalE164(raw.callerIdNumber, 'callerIdNumber', problems);
     const enabled = requireBoolean(raw.enabled, 'enabled', problems);
     if (!Array.isArray(raw.memberExtensions) || raw.memberExtensions.length === 0) {
       problems.push('memberExtensions must be a non-empty array');
@@ -91,6 +98,19 @@ export class RingGroupProvisioningService {
     }
 
     const existing = await this.deps.store.getAidaObject('RING_GROUP', ringGroupId);
+
+    // A virtual extension must not silently take over a location an
+    // extension (or another ring group) already owns. Checked BEFORE any
+    // dialplan row is replaced.
+    if (enabled && (!existing || existing.context !== context || existing.exten !== virtualExtension)) {
+      const occupant = await this.deps.store.findObjectAtLocation(context, virtualExtension);
+      if (occupant && !(occupant.kind === 'RING_GROUP' && occupant.external_id === ringGroupId)) {
+        throw new ConflictError(
+          `dialplan location ${context}/${virtualExtension} is already used by ${occupant.kind} ${occupant.external_id}`,
+        );
+      }
+    }
+
     await this.deps.store.withTransaction(async (tx) => {
       if (existing && (existing.context !== context || existing.exten !== virtualExtension)) {
         await tx.deleteDialplan(existing.context, existing.exten);
@@ -99,7 +119,14 @@ export class RingGroupProvisioningService {
         await tx.replaceDialplan(
           context,
           virtualExtension,
-          ringGroupDialplanRows(ringGroupId, memberEndpointIds, ringTimeoutSeconds, musicOnHoldClass, callerIdName),
+          ringGroupDialplanRows(
+            ringGroupId,
+            memberEndpointIds,
+            ringTimeoutSeconds,
+            musicOnHoldClass,
+            callerIdName,
+            callerIdNumber,
+          ),
         );
       } else {
         await tx.deleteDialplan(context, virtualExtension);

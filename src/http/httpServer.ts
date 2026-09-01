@@ -11,6 +11,9 @@ export interface ApiRequest {
   path: string;
   params: Record<string, string>;
   body: unknown;
+  /** Set only for routes declaring rawBody; needed for signature checks. */
+  rawBody?: Buffer;
+  headers: Record<string, string | undefined>;
   clientIp: string;
   correlationId: string;
 }
@@ -27,8 +30,15 @@ export interface Route {
   /** Path pattern like /v1/provisioning/extensions/:extensionId */
   pattern: string;
   handler: RouteHandler;
-  /** CIDR-protected private route (default true for /v1/*). */
+  /**
+   * CIDR-protected private route (the default). Set false only for a route
+   * that authenticates a caller from outside the private LAN by its own
+   * signature — currently just the LiveKit webhook. Rate limiting and the
+   * body cap still apply.
+   */
   trusted?: boolean;
+  /** Hands the handler the unparsed body, required to verify a signature. */
+  rawBody?: boolean;
 }
 
 export interface HttpApiOptions {
@@ -113,7 +123,7 @@ export class HttpApi {
     res.end(payload);
   }
 
-  private async readBody(req: http.IncomingMessage): Promise<unknown> {
+  private async readRawBody(req: http.IncomingMessage): Promise<Buffer> {
     const chunks: Buffer[] = [];
     let size = 0;
     for await (const chunk of req) {
@@ -125,8 +135,12 @@ export class HttpApi {
       }
       chunks.push(chunk as Buffer);
     }
-    if (chunks.length === 0) return undefined;
-    const text = Buffer.concat(chunks).toString('utf8');
+    return Buffer.concat(chunks);
+  }
+
+  private parseBody(raw: Buffer): unknown {
+    if (raw.length === 0) return undefined;
+    const text = raw.toString('utf8');
     if (text.trim() === '') return undefined;
     try {
       return JSON.parse(text);
@@ -149,8 +163,8 @@ export class HttpApi {
         return;
       }
       if (path === '/readyz') {
-        const ready = this.opts.readiness.allReady();
-        this.send(res, ready ? 200 : 503, { ready, components: this.opts.readiness.snapshot() }, correlationId);
+        const snapshot = this.opts.readiness.snapshot();
+        this.send(res, snapshot.ready ? 200 : 503, snapshot, correlationId);
         return;
       }
 
@@ -161,26 +175,41 @@ export class HttpApi {
         this.send(res, 403, { error: 'forbidden' }, correlationId);
         return;
       }
-      if (!ipInCidrs(clientIp, this.opts.trustedServerCidrs)) {
+
+      const route = this.routes.find((candidate) => candidate.method === method && candidate.regex.test(path));
+
+      // CIDR gating applies to every route except one that carries its own
+      // signature. An unknown path is gated as if it were private, so a
+      // caller outside the LAN cannot probe for route names.
+      if ((route?.trusted ?? true) && !ipInCidrs(clientIp, this.opts.trustedServerCidrs)) {
         log.warn('request outside trusted CIDRs denied', { clientIp });
         this.send(res, 403, { error: 'forbidden' }, correlationId);
         return;
       }
+      // Rate limiting and the body cap apply to signature-authenticated
+      // routes too: they face the internet.
       if (!this.limiter.allow(clientIp)) {
         this.send(res, 429, { error: 'rate limit exceeded' }, correlationId);
         return;
       }
 
-      for (const route of this.routes) {
-        if (route.method !== method) continue;
-        const match = route.regex.exec(path);
-        if (!match) continue;
+      if (route) {
+        const match = route.regex.exec(path) as RegExpExecArray;
         const params: Record<string, string> = {};
         route.paramNames.forEach((name, i) => {
           params[name] = decodeURIComponent(match[i + 1] ?? '');
         });
-        const body = await this.readBody(req);
-        const out = await route.handler({ method, path, params, body, clientIp, correlationId });
+        const raw = await this.readRawBody(req);
+        const out = await route.handler({
+          method,
+          path,
+          params,
+          body: route.rawBody ? undefined : this.parseBody(raw),
+          rawBody: route.rawBody ? raw : undefined,
+          headers: req.headers as Record<string, string | undefined>,
+          clientIp,
+          correlationId,
+        });
         this.send(res, out.status, out.body, correlationId);
         return;
       }

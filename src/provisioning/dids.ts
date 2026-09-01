@@ -1,5 +1,7 @@
 import type { Logger } from '../logging/logger.js';
 import type { DialplanRow, RealtimeStore } from './store.js';
+import type { RuntimeStore } from '../runtime/store.js';
+import type { DestinationType } from '../nocodb/configRepository.js';
 import { requireBoolean, requireContext, requireE164, requireUuid, throwIfProblems } from './validate.js';
 import { ValidationError } from '../errors.js';
 
@@ -8,10 +10,20 @@ export interface DidInput {
   context: string;
   fastAgiPath?: string;
   enabled: boolean;
+  /**
+   * Fail-safe association (issue #9). Optional so the provisioning path
+   * AidaAdmin uses today keeps working, but a DID provisioned without it
+   * has no destination of its own to fall back to when the cloud is
+   * unavailable — so its absence is logged as the gap it is.
+   */
+  tenantId?: string;
+  destinationType?: DestinationType;
+  destinationId?: string;
 }
 
 export interface DidServiceDeps {
   store: RealtimeStore;
+  runtime?: RuntimeStore;
   logger: Logger;
   officePulseInstanceId: string;
   fastAgiHost: string;
@@ -21,14 +33,13 @@ export interface DidServiceDeps {
 }
 
 /**
- * Realtime dialplan rows for an inbound DID (POC issues 2/3/5). Fixed,
- * deterministic order:
+ * Realtime dialplan rows for an inbound DID. Fixed, deterministic order:
  *
  *   DID -> recording disclosure -> FastAGI bootstrap -> post-bootstrap
  *
  * The rows NEVER route directly to a destination — routing decisions come
  * from the FastAGI bootstrap and the static aida-post-bootstrap include,
- * which also owns the local fallback path when Aida is unavailable.
+ * which also owns the local fallback path.
  */
 export function didDialplanRows(didRouteId: string, deps: DidServiceDeps, fastAgiPath: string): DialplanRow[] {
   return [
@@ -44,7 +55,7 @@ export function didDialplanRows(didRouteId: string, deps: DidServiceDeps, fastAg
 export class DidProvisioningService {
   constructor(private readonly deps: DidServiceDeps) {}
 
-  async provision(didRouteIdRaw: string, raw: DidInput): Promise<{ status: string }> {
+  async provision(didRouteIdRaw: string, raw: DidInput): Promise<{ status: string; fallbackPersisted: boolean }> {
     const problems: string[] = [];
     const didRouteId = requireUuid(didRouteIdRaw, 'didRouteId', problems);
     const didE164 = requireE164(raw.didE164, 'didE164', problems);
@@ -53,6 +64,23 @@ export class DidProvisioningService {
     const fastAgiPath = raw.fastAgiPath ?? '/bootstrap';
     if (!/^\/[a-zA-Z0-9/_-]{0,60}$/.test(fastAgiPath)) {
       problems.push('fastAgiPath must be an absolute path of safe characters');
+    }
+
+    // The fail-safe association is all-or-nothing: a partial one would
+    // produce a fallback that cannot be tenant-checked.
+    const hasAnyFallbackField =
+      raw.tenantId !== undefined || raw.destinationType !== undefined || raw.destinationId !== undefined;
+    let tenantId = '';
+    let destinationId = '';
+    let destinationType: DestinationType | undefined;
+    if (hasAnyFallbackField) {
+      tenantId = requireUuid(raw.tenantId, 'tenantId', problems);
+      destinationId = requireUuid(raw.destinationId, 'destinationId', problems);
+      if (raw.destinationType !== 'EXTENSION' && raw.destinationType !== 'RING_GROUP') {
+        problems.push('destinationType must be EXTENSION or RING_GROUP');
+      } else {
+        destinationType = raw.destinationType;
+      }
     }
     throwIfProblems(problems);
 
@@ -74,7 +102,7 @@ export class DidProvisioningService {
       await tx.upsertAidaObject({
         kind: 'DID',
         external_id: didRouteId,
-        tenant_id: null,
+        tenant_id: tenantId === '' ? null : tenantId,
         context,
         exten: didE164,
         endpoint_id: null,
@@ -82,7 +110,26 @@ export class DidProvisioningService {
       });
     });
 
-    this.deps.logger.info('did provisioned', { didRouteId, context, didE164: '[e164]' });
-    return { status: 'provisioned' };
+    // Written after the dialplan so a projection never points at a DID
+    // that failed to provision.
+    let fallbackPersisted = false;
+    if (destinationType && this.deps.runtime) {
+      await this.deps.runtime.upsertDidFallback({
+        didRouteId,
+        tenantId,
+        didE164,
+        destinationType,
+        destinationId,
+        enabled,
+      });
+      fallbackPersisted = true;
+    } else if (!destinationType) {
+      this.deps.logger.warn('DID provisioned without a local destination; cloud-outage fallback will use the operator default', {
+        didRouteId,
+      });
+    }
+
+    this.deps.logger.info('did provisioned', { didRouteId, context, fallbackPersisted });
+    return { status: 'provisioned', fallbackPersisted };
   }
 }

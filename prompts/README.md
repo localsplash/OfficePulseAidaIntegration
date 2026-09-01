@@ -8,7 +8,7 @@ language menu.
 | Prompt | Played to | When |
 |---|---|---|
 | `aida-recording-disclosure` | caller | always, before FastAGI/LiveKit — first thing on every DID |
-| `aida-circuits-busy` | caller | Aida/LiveKit/AidaControl unavailable, before direct fallback dial |
+| `aida-circuits-busy` | caller | NocoDB/LiveKit/runtime DB unavailable, before direct fallback dial |
 | `aida-agent-incident` | answering extension | after answer on the fallback path, before bridging |
 
 ## Workflow

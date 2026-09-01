@@ -27,8 +27,9 @@ function makeManager(drainTimeoutMs = 150): { manager: TakeoverManager; ari: Fak
 /** Drive a caller through SCREEN into a bridged Aida conversation. */
 async function screenCall(ari: FakeAri, callSessionId = CS): Promise<{ caller: AriChannel; livekit: AriChannel; bridgeId: string }> {
   const caller = ari.makeChannel('caller-1', 'Up', '15551230001');
+  // No route token is set: this service owns the room and the agent
+  // dispatch, so none is minted or required (issue #9).
   ari.setVar(caller.id, CHANVAR.sipDestination, 'room-1@sip.livekit.test');
-  ari.setVar(caller.id, CHANVAR.routeToken, 'tok-1');
   ari.emitStasisStart(['screen', callSessionId], caller);
   await tick();
   assert.equal(ari.originates.length, 1, 'exactly one livekit originate');
@@ -59,7 +60,8 @@ test('screen flow: caller answered, bridge created, livekit originated through t
   assert.ok(originate);
   assert.equal(originate.endpoint, 'PJSIP/room-1@sip.livekit.test@livekit-cloud');
   assert.equal(originate.variables?.['PJSIP_HEADER(add,X-Aida-Call-Session)'], CS);
-  assert.equal(originate.variables?.['PJSIP_HEADER(add,X-Aida-Route-Token)'], 'tok-1');
+  // No route token header: nothing mints one now.
+  assert.equal(originate.variables?.['PJSIP_HEADER(add,X-Aida-Route-Token)'], undefined);
   const bridge = ari.bridges.get(bridgeId);
   assert.ok(bridge?.channels.has(caller.id));
   assert.ok(bridge?.channels.has(livekit.id));
@@ -268,4 +270,15 @@ test('reconciliation rebuilds sessions and prevents duplicate originate for a re
   const session = fresh.getSession(CS);
   assert.ok(session?.bridgeId, 'bridge rediscovered');
   assert.equal(session?.humanChannelId, human.id);
+});
+
+test('a caller with no SIP destination is released to the dialplan fallback', async () => {
+  const { ari } = makeManager();
+  const caller = ari.makeChannel('caller-x', 'Up');
+  ari.emitStasisStart(['screen', 'cs-x'], caller);
+  await tick();
+  // Congestion hands the call back to the dialplan, which still has the
+  // local fallback path — the caller is never simply dropped.
+  assert.deepEqual(ari.hangups, [{ channelId: caller.id, reason: 'congestion' }]);
+  assert.equal(ari.originates.length, 0);
 });

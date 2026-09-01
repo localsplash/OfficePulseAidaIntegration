@@ -3,7 +3,7 @@
 #
 # Checks, in order:
 #  1. service process is healthy (/healthz) and dependencies are ready
-#     (/readyz reports ari + mysql + aidacontrol),
+#     (/readyz reports each dependency independently, with criticality),
 #  2. prompt manifest validates against the deployed sound files,
 #  3. the Asterisk include and Stasis app are visible from the
 #     OfficePulse host (run the printed commands there).

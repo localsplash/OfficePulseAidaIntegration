@@ -86,6 +86,13 @@ export interface RealtimeStore {
   getAidaObject(kind: AidaObjectKind, externalId: string): Promise<AidaObjectRow | undefined>;
   findExtensionObjectByExten(context: string, exten: string): Promise<AidaObjectRow | undefined>;
   findDidObjectByExten(context: string, exten: string): Promise<AidaObjectRow | undefined>;
+  /**
+   * Any provisioned object already occupying a dialplan location,
+   * regardless of kind. Collision detection must see an extension and a
+   * ring group as competing for the same slot, because in the dialplan
+   * they are: whichever is written last silently wins.
+   */
+  findObjectAtLocation(context: string, exten: string): Promise<AidaObjectRow | undefined>;
   getAidaDeviceByExtension(extensionExternalId: string): Promise<AidaDeviceRow | undefined>;
   getRequest(requestId: string): Promise<RequestRecord | undefined>;
   ping(): Promise<boolean>;

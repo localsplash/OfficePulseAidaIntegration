@@ -11,7 +11,7 @@ async function withApi(
 ): Promise<void> {
   const { logger } = captureLogger();
   const readiness = new Readiness();
-  readiness.register('dep', true);
+  readiness.register('dep', 'critical', true);
   const api = new HttpApi({
     logger,
     readiness,

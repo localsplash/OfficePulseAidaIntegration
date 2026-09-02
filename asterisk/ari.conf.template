@@ -1,0 +1,17 @@
+; ARI configuration template for OfficePulse Asterisk 22.10.1.
+; Install as /etc/asterisk/ari.conf (merge with existing settings).
+;
+; ARI is bound to the private LAN interface only; it must never be
+; reachable from any public network (see deploy/firewall-matrix.md).
+
+[general]
+enabled = yes
+pretty = no
+; allowed_origins stays unset: no browser clients.
+
+[aida]
+type = user
+read_only = no
+; Set a strong per-deployment password; the integration service reads it
+; from ARI_PASSWORD. Do not commit real credentials.
+password = __ARI_PASSWORD__

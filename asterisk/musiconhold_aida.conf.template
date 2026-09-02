@@ -1,0 +1,10 @@
+; Aida hold-music classes. Install as /etc/asterisk/musiconhold_aida.conf
+; and add to musiconhold.conf:  #include musiconhold_aida.conf
+;
+; The takeover command may name an organization-selected class
+; (ring group / DID route musicOnHoldClass); 'default' is the fallback.
+
+[aida-default-tune]
+mode = files
+directory = /var/lib/asterisk/moh/aida
+; Place organization-provided hold tunes (8 kHz mono) in that directory.

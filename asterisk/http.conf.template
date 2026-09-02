@@ -1,0 +1,10 @@
+; Asterisk built-in HTTP server (required by ARI) — private LAN binding.
+; Install as /etc/asterisk/http.conf (merge with existing settings).
+
+[general]
+enabled = yes
+; Bind ONLY to the private LAN address of the OfficePulse host.
+bindaddr = __OFFICEPULSE_PRIVATE_IP__
+bindport = 8088
+; TLS is optional inside the trusted LAN for the POC; never expose 8088
+; beyond the LSAidaOffice01 <-> OfficePulse segment.

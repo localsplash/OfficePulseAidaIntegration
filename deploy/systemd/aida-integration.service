@@ -1,0 +1,30 @@
+[Unit]
+Description=OfficePulse Aida Integration (FastAGI, ARI takeover, Realtime provisioning)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aida
+Group=aida
+WorkingDirectory=/opt/aida-integration
+EnvironmentFile=/etc/aida-integration/env
+ExecStart=/usr/bin/node /opt/aida-integration/dist/index.js
+Restart=always
+RestartSec=2
+# Graceful drain: SIGTERM stops new FastAGI/HTTP work; established
+# caller-human bridges live in Asterisk and are unaffected.
+TimeoutStopSec=15
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

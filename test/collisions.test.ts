@@ -14,7 +14,7 @@ import { captureLogger } from './helpers/capture.js';
  * every write path must detect the clash BEFORE replacing any row.
  */
 
-const TENANT = '11111111-1111-4111-8111-111111111111';
+const TENANT = '2';
 const EXT_A = '22222222-2222-4222-8222-22222222222a';
 const EXT_B = '22222222-2222-4222-8222-22222222222b';
 const RG_A = '44444444-4444-4444-8444-44444444444a';

@@ -1,7 +1,12 @@
 import { loadConfig } from './config.js';
+import { platformEnvironment } from './platform/settings.js';
+import { migrateRuntime } from './runtime/migrate.js';
+import { deviceRoutes, identityTenantReader } from './devices/access.js';
+import { MysqlDeviceStore } from './devices/mysqlDeviceStore.js';
+import { DeviceRoomGuard } from './devices/roomGuard.js';
 import { Logger } from './logging/logger.js';
 import { Readiness } from './readiness.js';
-import { HttpApi } from './http/httpServer.js';
+import { HttpApi, publicApiOptions } from './http/httpServer.js';
 import { buildRoutes } from './http/routes.js';
 import { FastAgiServer } from './agi/fastAgiServer.js';
 import { createBootstrapHandler } from './agi/bootstrapHandler.js';
@@ -37,7 +42,8 @@ import { HttpDeviceProvisioningService } from './provisioning/deviceProvisioning
  * local destination — without stopping the process.
  */
 async function main(): Promise<void> {
-  const config = loadConfig();
+  const config = loadConfig(await platformEnvironment());
+  await migrateRuntime(config.runtimeMysql);
   const logger = new Logger({ level: config.logLevel });
   const readiness = new Readiness();
 
@@ -67,6 +73,8 @@ async function main(): Promise<void> {
     timeoutMs: config.nocodb.timeoutMs,
   });
   const configRepository = new NocoConfigRepository(nocoClient);
+  const tenantEnabled = identityTenantReader(config.identity.baseUrl, config.identity.clientSecret);
+  const devices = new MysqlDeviceStore(config.runtimeMysql, runtimeStore);
 
   const livekit = new LiveKitClient({
     url: config.livekit.url,
@@ -80,6 +88,12 @@ async function main(): Promise<void> {
   const notifier = config.pusher
     ? new PusherNotifier({ ...config.pusher, logger: logger.child({ component: 'pusher' }) })
     : undefined;
+
+  const roomGuard = new DeviceRoomGuard({ rooms: livekit, devices, runtime: runtimeStore,
+    config: configRepository, tenantEnabled, logger: logger.child({ component: 'device-room-guard' }) });
+  const roomGuardTimer = setInterval(() => { void roomGuard.sweep(); }, 10_000);
+  roomGuardTimer.unref();
+  void roomGuard.sweep();
 
   const deviceProvisioning = config.provisioningServer
     ? new HttpDeviceProvisioningService({
@@ -109,6 +123,7 @@ async function main(): Promise<void> {
     logger: logger.child({ component: 'orchestrator' }),
     livekitSipHost: config.livekit.sipHost,
     defaultLocale: config.call.defaultLocale,
+    tenantEnabled,
   });
 
   const ari = new AriClient({
@@ -122,7 +137,7 @@ async function main(): Promise<void> {
 
   const takeover = new TakeoverManager({
     ari,
-    events: new RuntimeCallEventSink(runtimeStore, logger.child({ component: 'call-events' })),
+    events: new RuntimeCallEventSink(runtimeStore, logger.child({ component: 'call-events' }), livekit),
     logger: logger.child({ component: 'takeover' }),
     drainTimeoutMs: config.takeover.drainTimeoutMs,
     defaultRingTimeoutSeconds: config.takeover.ringTimeoutSeconds,
@@ -161,14 +176,7 @@ async function main(): Promise<void> {
     pusherCluster: config.handsetConfig.pusherCluster,
   });
 
-  const httpApi = new HttpApi({
-    logger: logger.child({ component: 'http' }),
-    readiness,
-    trustedServerCidrs: config.http.trustedServerCidrs,
-    trustedProxyCidrs: config.http.trustedProxyCidrs,
-    maxBodyBytes: config.http.maxBodyBytes,
-    rateLimitPerMinute: config.http.rateLimitPerMinute,
-    routes: buildRoutes({
+  const routes = (() => { const privateRoutes = buildRoutes({
       extensions,
       ringGroups,
       dids,
@@ -183,8 +191,27 @@ async function main(): Promise<void> {
         logger: logger.child({ component: 'livekit-webhook' }),
       }),
       defaultRingTimeoutSeconds: config.takeover.ringTimeoutSeconds,
-    }),
-  });
+    });
+      const commandRoute = privateRoutes.find((r) => r.method === 'POST' && r.pattern.endsWith('/commands'))!;
+      return [
+        ...deviceRoutes({ store: devices, runtime: runtimeStore, config: configRepository, tenantEnabled, livekit: config.livekit, commandRoute }),
+        ...privateRoutes.map((r) => r.pattern.startsWith('/v1/calls/') ? { ...r, pattern: r.pattern.replace('/v1/calls/', '/v1/admin/calls/') } : r),
+      ];
+    })();
+
+  const httpOptions = {
+    logger: logger.child({ component: 'http' }),
+    readiness,
+    trustedServerCidrs: config.http.trustedServerCidrs,
+    trustedProxyCidrs: config.http.trustedProxyCidrs,
+    maxBodyBytes: config.http.maxBodyBytes,
+    rateLimitPerMinute: config.http.rateLimitPerMinute,
+    routes,
+  };
+  const httpApi = new HttpApi(httpOptions);
+  // The reverse proxy points only at this listener. Private provisioning and
+  // admin routes are absent, irrespective of forwarded-IP configuration.
+  const publicHttpApi = new HttpApi(publicApiOptions(httpOptions));
 
   const fastAgi = new FastAgiServer({
     port: config.fastAgi.port,
@@ -202,6 +229,7 @@ async function main(): Promise<void> {
   });
 
   await httpApi.listen(config.http.port, config.http.bind);
+  await publicHttpApi.listen(config.http.publicPort, config.http.bind);
   logger.info('http api listening', { port: config.http.port, bind: config.http.bind });
   ari.start();
   await fastAgi.listen();
@@ -227,15 +255,18 @@ async function main(): Promise<void> {
     shuttingDown = true;
     logger.info('shutting down', { signal });
     clearInterval(dependencyProbe);
+    clearInterval(roomGuardTimer);
     void (async () => {
       // Stop accepting new work first, then release dependencies. Live
       // caller-human bridges are never torn down by shutdown — Asterisk
       // owns established media.
       await fastAgi.close().catch(() => {});
       await httpApi.close().catch(() => {});
+      await publicHttpApi.close().catch(() => {});
       ari.stop();
       await realtimeStore.close().catch(() => {});
       await runtimeStore.close().catch(() => {});
+      await devices.close().catch(() => {});
       logger.info('shutdown complete');
       process.exit(0);
     })();

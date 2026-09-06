@@ -172,6 +172,10 @@ test('a failed command is recorded as failed so a replay does not silently succe
 
   await assert.rejects(call(routes, 'POST', `/v1/calls/${CALL_ID}/commands`, TAKEOVER), /is not provisioned/);
   assert.equal([...runtime.commands.values()][0]?.status, 'failed');
+  const replay = await call(routes, 'POST', `/v1/calls/${CALL_ID}/commands`, TAKEOVER);
+  assert.equal(replay.status, 409, 'a handset must not interpret a recorded failure as acceptance');
+  assert.equal((replay.body as { status: string }).status, 'failed');
+  assert.equal(JSON.stringify(replay.body).includes('is not provisioned'), false);
 });
 
 test('call state and durable events are readable back', async () => {

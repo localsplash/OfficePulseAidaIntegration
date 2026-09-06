@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto';
 import type { Logger } from '../logging/logger.js';
-import type { RuntimeStore } from '../runtime/store.js';
+import type { RuntimeStore, LiveKitWebhookUpdate } from '../runtime/store.js';
 import { verifyWebhook } from './token.js';
 
 export interface WebhookOutcome {
@@ -16,25 +17,15 @@ export interface LiveKitWebhookHandlerOptions {
   logger: Logger;
 }
 
-interface LiveKitWebhookEvent {
-  id?: string;
-  event?: string;
-  room?: { name?: string; sid?: string };
-  participant?: { sid?: string; identity?: string; kind?: string };
+function text(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+function object(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown> : undefined;
 }
 
-/**
- * Receives LiveKit Cloud webhooks (issue #9).
- *
- * Two independent guards: the signature must verify against the raw body,
- * and the delivery id must be unseen. LiveKit retries deliveries, so a
- * duplicate is expected traffic — it is acknowledged with 200 and dropped,
- * never processed twice.
- *
- * The room name carries the call session id; participant SIDs are recorded
- * so the current agent participant is always known. Transcripts travel
- * over LiveKit Data and are never persisted here.
- */
+/** Verify the signed raw body before storage; acknowledge only committed effects. */
 export class LiveKitWebhookHandler {
   constructor(private readonly opts: LiveKitWebhookHandlerOptions) {}
 
@@ -45,79 +36,48 @@ export class LiveKitWebhookHandler {
       return { accepted: false, reason: verification.reason };
     }
 
-    let event: LiveKitWebhookEvent;
-    try {
-      event = JSON.parse(rawBody.toString('utf8')) as LiveKitWebhookEvent;
-    } catch {
-      return { accepted: false, reason: 'unparseable body' };
+    let event: Record<string, unknown> | undefined;
+    try { event = object(JSON.parse(rawBody.toString('utf8'))); }
+    catch { return { accepted: false, reason: 'unparseable body' }; }
+    if (!event) return { accepted: false, reason: 'body must be an event object' };
+    const eventType = text(event.event);
+    const deliveryId = text(event.id) ?? createHash('sha256').update(rawBody).digest('hex');
+    if (!eventType || eventType.length > 52 || deliveryId.length > 120) {
+      return { accepted: false, reason: 'invalid event type or delivery id' };
     }
-
-    const eventType = event.event ?? 'unknown';
-    const deliveryId = event.id ?? `${eventType}:${event.room?.sid ?? ''}:${event.participant?.sid ?? ''}`;
-    const callSessionId = callSessionIdFromRoom(event.room?.name);
-
-    const fresh = await this.opts.runtime.recordWebhookDelivery('livekit', deliveryId, eventType, callSessionId);
-    if (!fresh) return { accepted: true, duplicate: true, event: eventType };
-
-    if (!callSessionId) {
-      // A room we did not create; acknowledge without inventing state.
+    const roomName = text(object(event.room)?.name);
+    const callSessionId = callSessionIdFromRoom(roomName);
+    if (!callSessionId || !roomName) {
       this.opts.logger.info('livekit webhook for unknown room ignored', { eventType });
       return { accepted: true, event: eventType };
     }
 
-    try {
-      await this.apply(callSessionId, eventType, event);
-    } catch (err) {
-      this.opts.logger.warn('livekit webhook processing failed', { callSessionId, eventType, err });
+    const rawParticipant = object(event.participant);
+    const sid = text(rawParticipant?.sid);
+    const identity = text(rawParticipant?.identity);
+    const kind = text(rawParticipant?.kind) ?? 'standard';
+    if ((sid?.length ?? 0) > 80 || (identity?.length ?? 0) > 120 || kind.length > 20) {
+      return { accepted: false, reason: 'invalid participant fields' };
     }
-    return { accepted: true, event: eventType };
-  }
-
-  private async apply(callSessionId: string, eventType: string, event: LiveKitWebhookEvent): Promise<void> {
-    const participant = event.participant;
-    switch (eventType) {
-      case 'participant_joined':
-        if (participant?.sid) {
-          await this.opts.runtime.upsertParticipant(callSessionId, {
-            participantSid: participant.sid,
-            identity: participant.identity,
-            kind: participant.kind ?? 'standard',
-          });
-          // The agent's participant SID is the handle for later data sends.
-          if (isAgent(participant)) {
-            await this.opts.runtime.updateCallSession(callSessionId, { agentParticipantSid: participant.sid });
-          }
-        }
-        break;
-      case 'participant_left':
-        if (participant?.sid) await this.opts.runtime.markParticipantLeft(callSessionId, participant.sid);
-        break;
-      case 'room_finished':
-        await this.opts.runtime.updateCallSession(callSessionId, {
-          state: 'room-finished',
-          endedAt: new Date().toISOString(),
-        });
-        break;
-      default:
-        break;
+    const delivery: LiveKitWebhookUpdate = {
+      deliveryId, eventType, callSessionId, roomName,
+      ...(sid ? { participant: { sid, identity, kind,
+        isAgent: kind.toUpperCase() === 'AGENT' || (identity ?? '').startsWith('agent-') } } : {}),
+    };
+    if (!this.opts.runtime.applyLiveKitWebhook) {
+      throw new Error('Runtime store must support atomic LiveKit webhook processing');
     }
-    await this.opts.runtime.appendCallEvent(callSessionId, {
-      eventType: `livekit.${eventType}`,
-      payload: {
-        participantSid: participant?.sid,
-        identity: participant?.identity,
-      },
-    });
+    // A storage/effect failure propagates to HTTP 5xx so LiveKit retries. No
+    // receipt commits independently and no failure is converted to success.
+    const result = await this.opts.runtime.applyLiveKitWebhook(delivery);
+    if (result === 'unknown-room') this.opts.logger.info('livekit webhook for unknown room ignored', { eventType });
+    return { accepted: true, event: eventType, ...(result === 'duplicate' ? { duplicate: true } : {}) };
   }
-}
-
-function isAgent(participant: { identity?: string; kind?: string }): boolean {
-  return participant.kind?.toUpperCase() === 'AGENT' || (participant.identity ?? '').startsWith('agent-');
 }
 
 /** Rooms are named `aida-<callSessionId>` by the orchestrator. */
 export function callSessionIdFromRoom(roomName: string | undefined): string | undefined {
-  if (!roomName || !roomName.startsWith('aida-')) return undefined;
+  if (!roomName?.startsWith('aida-')) return undefined;
   const id = roomName.slice('aida-'.length);
-  return /^[0-9a-f-]{36}$/i.test(id) ? id : undefined;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) ? id : undefined;
 }

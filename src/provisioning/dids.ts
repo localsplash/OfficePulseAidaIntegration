@@ -2,7 +2,7 @@ import type { Logger } from '../logging/logger.js';
 import type { DialplanRow, RealtimeStore } from './store.js';
 import type { RuntimeStore } from '../runtime/store.js';
 import type { DestinationType } from '../nocodb/configRepository.js';
-import { requireBoolean, requireContext, requireE164, requireUuid, throwIfProblems } from './validate.js';
+import { requireBoolean, requireContext, requireE164, requireUuid, requireTenantId, throwIfProblems } from './validate.js';
 import { ValidationError } from '../errors.js';
 
 export interface DidInput {
@@ -41,15 +41,20 @@ export interface DidServiceDeps {
  * from the FastAGI bootstrap and the static aida-post-bootstrap include,
  * which also owns the local fallback path.
  */
-export function didDialplanRows(didRouteId: string, deps: DidServiceDeps, fastAgiPath: string): DialplanRow[] {
-  return [
+export function didDialplanRows(didRouteId: string, deps: DidServiceDeps, fastAgiPath: string, fallback?: { context: string; exten: string }): DialplanRow[] {
+  const rows: DialplanRow[] = [
     { priority: 1, app: 'NoOp', appdata: `aida-did ${didRouteId}` },
     { priority: 2, app: 'Set', appdata: `OFFICEPULSE_INSTANCE_ID=${deps.officePulseInstanceId}` },
     { priority: 3, app: 'Set', appdata: 'ASTERISK_LINKEDID=${CHANNEL(linkedid)}' },
+    ...(fallback ? [
+      { priority: 0, app: 'Set', appdata: `AIDA_FALLBACK_CONTEXT=${fallback.context}` },
+      { priority: 0, app: 'Set', appdata: `AIDA_FALLBACK_EXTENSION=${fallback.exten}` },
+    ] : []),
     { priority: 4, app: 'Gosub', appdata: `${deps.disclosureContext},s,1` },
     { priority: 5, app: 'AGI', appdata: `agi://${deps.fastAgiHost}:${deps.fastAgiPort}${fastAgiPath}` },
     { priority: 6, app: 'Goto', appdata: `${deps.postBootstrapContext},s,1` },
   ];
+  return rows.map((row, i) => ({ ...row, priority: i + 1 }));
 }
 
 export class DidProvisioningService {
@@ -74,7 +79,7 @@ export class DidProvisioningService {
     let destinationId = '';
     let destinationType: DestinationType | undefined;
     if (hasAnyFallbackField) {
-      tenantId = requireUuid(raw.tenantId, 'tenantId', problems);
+      tenantId = requireTenantId(raw.tenantId, 'tenantId', problems);
       destinationId = requireUuid(raw.destinationId, 'destinationId', problems);
       if (raw.destinationType !== 'EXTENSION' && raw.destinationType !== 'RING_GROUP') {
         problems.push('destinationType must be EXTENSION or RING_GROUP');
@@ -84,6 +89,18 @@ export class DidProvisioningService {
     }
     throwIfProblems(problems);
 
+    let fallback: { context: string; exten: string } | undefined;
+    if (destinationType) {
+      const target = await this.deps.store.getAidaObject(destinationType, destinationId);
+      if (!target || target.tenant_id !== tenantId || target.enabled !== 1) {
+        throw new ValidationError('fallback must be an enabled provisioned destination in this business');
+      }
+      const checked: string[] = [];
+      const targetContext = requireContext(target.context, 'fallback context', checked);
+      if (!/^[0-9*#]{1,12}$/.test(target.exten)) checked.push('invalid fallback extension');
+      throwIfProblems(checked);
+      fallback = { context: targetContext, exten: target.exten };
+    }
     const existing = await this.deps.store.getAidaObject('DID', didRouteId);
     const conflicting = await this.deps.store.findDidObjectByExten(context, didE164);
     if (conflicting && conflicting.external_id !== didRouteId) {
@@ -95,7 +112,7 @@ export class DidProvisioningService {
         await tx.deleteDialplan(existing.context, existing.exten);
       }
       if (enabled) {
-        await tx.replaceDialplan(context, didE164, didDialplanRows(didRouteId, this.deps, fastAgiPath));
+        await tx.replaceDialplan(context, didE164, didDialplanRows(didRouteId, this.deps, fastAgiPath, fallback));
       } else {
         await tx.deleteDialplan(context, didE164);
       }

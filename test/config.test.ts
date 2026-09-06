@@ -5,6 +5,7 @@ import { ConfigError } from '../src/errors.js';
 
 const PROD_ENV = {
   NODE_ENV: 'production',
+  IDENTITY_BASE_URL: 'https://identity.example.test',
   OFFICEPULSE_INSTANCE_ID: 'op-1',
   TRUSTED_SERVER_CIDRS: '10.0.0.0/24',
   ARI_URL: 'http://10.0.0.2:8088/ari',
@@ -82,7 +83,7 @@ test('production requires the dependencies this service now orchestrates itself'
 test('no AidaControl configuration is read or required any more', () => {
   const config = loadConfig({ ...PROD_ENV, AIDACONTROL_BASE_URL: 'http://stale:9010' });
   assert.equal(JSON.stringify(config).includes('stale:9010'), false);
-  assert.equal(config.nocodb.baseName, 'AidaAdmin');
+  assert.equal(config.nocodb.baseName, 'PlatformConfig');
   assert.equal(config.livekit.agentName, 'aida-prime');
 });
 

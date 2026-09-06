@@ -17,6 +17,7 @@ export interface AppConfig {
   };
   http: {
     port: number;
+    publicPort: number;
     bind: string;
     maxBodyBytes: number;
     rateLimitPerMinute: number;
@@ -91,6 +92,7 @@ export interface AppConfig {
     /** PJSIP endpoint name of the existing LiveKit Cloud SIP trunk. */
     livekitTrunkEndpoint?: string;
   };
+  identity: { baseUrl: string; clientSecret?: string };
   call: {
     defaultLocale: string;
     /** Operator emergency fallback; used only when a DID has no projection. */
@@ -194,6 +196,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     },
     http: {
       port: int(env, 'HTTP_PORT', 8085, problems, 1, 65535),
+      publicPort: int(env, 'PUBLIC_HTTP_PORT', 8086, problems, 1, 65535),
       bind: env.HTTP_BIND ?? '0.0.0.0',
       maxBodyBytes: int(env, 'HTTP_MAX_BODY_BYTES', 64 * 1024, problems, 256),
       rateLimitPerMinute: int(env, 'HTTP_RATE_LIMIT_PER_MINUTE', 300, problems),
@@ -220,12 +223,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       port: int(env, 'RUNTIME_MYSQL_PORT', 3306, problems, 1, 65535),
       user: str(env, 'RUNTIME_MYSQL_USER', problems, required('aida')),
       password: str(env, 'RUNTIME_MYSQL_PASSWORD', problems, required('dev-only')),
-      database: env.RUNTIME_MYSQL_DATABASE ?? 'aida_officepulse',
+      database: env.RUNTIME_MYSQL_DATABASE ?? 'aida_db',
     },
     nocodb: {
       baseUrl: str(env, 'NOCODB_BASE_URL', problems, required('http://127.0.0.1:8080')),
       apiToken: str(env, 'NOCODB_API_TOKEN', problems, required('dev-only')),
-      baseName: env.NOCODB_BASE_NAME ?? 'AidaAdmin',
+      baseName: env.NOCODB_BASE_NAME ?? 'PlatformConfig',
       timeoutMs: int(env, 'NOCODB_TIMEOUT_MS', 4_000, problems, 100),
     },
     livekit: {
@@ -270,6 +273,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       defaultMohClass: env.TAKEOVER_DEFAULT_MOH_CLASS ?? 'default',
       livekitTrunkEndpoint: optStr(env, 'LIVEKIT_TRUNK_ENDPOINT'),
     },
+    identity: { baseUrl: str(env, 'IDENTITY_BASE_URL', problems, required('http://identity:3200')), clientSecret: optStr(env, 'IDENTITY_CLIENT_SECRET') },
     call: {
       defaultLocale: env.CALL_DEFAULT_LOCALE ?? 'en-US',
       operatorFallbackContext: optStr(env, 'OPERATOR_FALLBACK_CONTEXT'),

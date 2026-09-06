@@ -13,7 +13,10 @@ import { UpstreamError } from '../errors.js';
  * would silently report that every DID is unrouted.
  */
 
-export const AIDA_BASE_NAME = 'AidaAdmin';
+export const AIDA_BASE_NAME = 'PlatformConfig';
+
+const TABLES: Record<string, string> = { tenant: 'aida_tbl_TenantProfile', did_route: 'aida_tbl_DidRoute', assistant_profile: 'aida_tbl_AssistantProfile', extension: 'aida_tbl_Extension', ring_group: 'aida_tbl_RingGroup', ring_group_member: 'aida_tbl_RingGroupMember' };
+
 
 export type NocoRecord = Record<string, unknown>;
 
@@ -54,6 +57,7 @@ export class NocoDbReadClient implements NocoReadApi {
   private readonly baseName: string;
   private baseIdPromise?: Promise<string>;
   private tableIdsPromise?: Promise<Map<string, string>>;
+  private resolvedAt = 0;
 
   constructor(private readonly opts: NocoDbReadClientOptions) {
     this.fetchImpl = opts.fetchImpl ?? fetch;
@@ -83,6 +87,7 @@ export class NocoDbReadClient implements NocoReadApi {
       }
       return res.status === 204 ? null : await res.json();
     } catch (err) {
+      this.invalidate();
       if (err instanceof UpstreamError) throw err;
       if ((err as Error).name === 'AbortError') {
         throw new UpstreamError(`NocoDB request timed out after ${this.opts.timeoutMs}ms`, 'nocodb');
@@ -93,10 +98,26 @@ export class NocoDbReadClient implements NocoReadApi {
     }
   }
 
+  private async listPages<T>(path: string, maximum = 10_000): Promise<T[]> {
+    const rows: T[] = [];
+    let next = path;
+    for (let page = 0; page < 100; page++) {
+      const body = await this.request(next) as { list?: T[]; pageInfo?: { isLastPage?: boolean; totalRows?: number } };
+      const batch = body.list ?? [];
+      rows.push(...batch);
+      if (rows.length >= maximum || batch.length === 0 || body.pageInfo?.isLastPage === true ||
+        (body.pageInfo?.isLastPage === undefined && (!body.pageInfo?.totalRows || rows.length >= body.pageInfo.totalRows))) return rows.slice(0, maximum);
+      const url = new URL(path, this.opts.baseUrl);
+      url.searchParams.set('offset', String(rows.length));
+      next = url.pathname + url.search;
+    }
+    throw new UpstreamError('NocoDB pagination exceeded safety bound', 'nocodb');
+  }
+
   private resolveBaseId(): Promise<string> {
     this.baseIdPromise ??= (async () => {
-      const body = (await this.request('/api/v2/meta/bases')) as { list?: Array<{ id: string; title: string }> };
-      const matches = (body.list ?? []).filter(
+      const bases = await this.listPages<{ id: string; title: string }>('/api/v2/meta/bases');
+      const matches = bases.filter(
         (base) => base.title.trim().toLowerCase() === this.baseName.toLowerCase(),
       );
       if (matches.length === 0) {
@@ -120,10 +141,13 @@ export class NocoDbReadClient implements NocoReadApi {
   private resolveTableIds(): Promise<Map<string, string>> {
     this.tableIdsPromise ??= (async () => {
       const baseId = await this.resolveBaseId();
-      const body = (await this.request(`/api/v2/meta/bases/${baseId}/tables`)) as {
-        list?: Array<{ id: string; table_name: string }>;
-      };
-      return new Map((body.list ?? []).map((t) => [t.table_name, t.id]));
+      const tables = await this.listPages<{ id: string; table_name: string; title?: string }>(`/api/v2/meta/bases/${baseId}/tables`);
+      const ids = new Map<string, string>();
+      for (const table of tables) for (const name of new Set([table.table_name, table.title].filter((n): n is string => !!n))) {
+        if (ids.has(name) && ids.get(name) !== table.id) throw new BaseResolutionError(`duplicate NocoDB table ${name}`);
+        ids.set(name, table.id);
+      }
+      return ids;
     })().catch((err) => {
       this.tableIdsPromise = undefined;
       throw err;
@@ -132,18 +156,25 @@ export class NocoDbReadClient implements NocoReadApi {
   }
 
   async listRecords(table: string, where: NocoWhere[], limit = 200): Promise<NocoRecord[]> {
+    if (Date.now() - this.resolvedAt >= 30_000) { this.invalidate(); this.resolvedAt = Date.now(); }
     const tableIds = await this.resolveTableIds();
-    const tableId = tableIds.get(table);
+    const platform = this.baseName === 'PlatformConfig';
+    const tableId = tableIds.get(platform ? (TABLES[table] ?? table) : table);
+    if (platform) where = where.map((w) => ({ ...w, field: w.field === 'tenant_id' || (table === 'tenant' && w.field === 'id') ? 'iTenantId' : w.field === 'identity_user_id' ? 'iUserId' : w.field }));
     if (!tableId) {
       this.invalidate(); // the base may have gained the table since we looked
       throw new UpstreamError(`NocoDB base ${this.baseName} has no table '${table}'`, 'nocodb');
     }
-    const params = new URLSearchParams({ limit: String(limit) });
+    const params = new URLSearchParams({ limit: String(Math.min(limit, 200)) });
+    if (where.some((w) => !/^[A-Za-z0-9_]+$/.test(w.field) || !/^[A-Za-z0-9@+_*.:\-]{1,255}$/.test(String(w.value)))) throw new Error('invalid configuration lookup');
     if (where.length > 0) params.set('where', whereClause(where));
-    const body = (await this.request(`/api/v2/tables/${tableId}/records?${params}`)) as {
-      list?: NocoRecord[];
-    };
-    return body.list ?? [];
+    const rows = await this.listPages<NocoRecord>(`/api/v2/tables/${tableId}/records?${params}`, limit);
+    return rows.map((row) => platform ? {
+      ...row,
+      ...(row.iTenantId !== undefined ? { tenant_id: String(row.iTenantId) } : {}),
+      ...(row.iUserId !== undefined ? { identity_user_id: row.iUserId } : {}),
+      ...(table === 'tenant' ? { id: String(row.iTenantId), enabled: true } : {}),
+    } : row);
   }
 
   async ping(): Promise<boolean> {

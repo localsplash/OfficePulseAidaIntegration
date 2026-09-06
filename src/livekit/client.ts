@@ -180,4 +180,13 @@ export class LiveKitClient implements LiveKitApi {
       return false;
     }
   }
+
+  async listRooms(): Promise<string[]> {
+    const result = await this.twirp('RoomService', 'ListRooms', {}, { roomList: true }) as { rooms?: Array<{ name: string }> };
+    return (result?.rooms ?? []).map((room) => room.name);
+  }
+
+  async removeParticipant(roomName: string, identity: string): Promise<void> {
+    await this.twirp('RoomService', 'RemoveParticipant', { room: roomName, identity }, { roomAdmin: true, room: roomName });
+  }
 }

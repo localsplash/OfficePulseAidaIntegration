@@ -50,6 +50,7 @@ export interface CallOrchestratorOptions {
   /** SIP host of the existing LiveKit trunk; room@host is dialled by ARI. */
   livekitSipHost: string;
   defaultLocale: string;
+  tenantEnabled?: (id: number) => Promise<boolean>;
 }
 
 /** Room names are derived from the call session id: unique, no PII. */
@@ -89,6 +90,10 @@ export class CallOrchestrator {
     if (!route) {
       log.info('no enabled route for DID; taking local fallback');
       return this.fallbackDecision(request, 'no-enabled-route');
+    }
+    if (this.opts.tenantEnabled) {
+      const id = Number(route.tenant.id);
+      if (!Number.isSafeInteger(id) || id <= 0 || !(await this.opts.tenantEnabled(id))) return { disposition: 'REJECT' };
     }
     if (!route.didRoute.screeningEnabled) {
       // Screening deliberately off: go straight to the destination, which

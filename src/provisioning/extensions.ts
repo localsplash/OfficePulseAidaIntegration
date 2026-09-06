@@ -12,6 +12,7 @@ import {
   requireExtension,
   requireRequestId,
   requireUuid,
+  requireTenantId,
   sipUsernameFor,
   throwIfProblems,
 } from './validate.js';
@@ -101,7 +102,7 @@ export class ExtensionProvisioningService {
   async create(raw: ExtensionCreateInput): Promise<ExtensionCreateResult> {
     const problems: string[] = [];
     const requestId = requireRequestId(raw.requestId, 'requestId', problems);
-    const tenantId = requireUuid(raw.tenantId, 'tenantId', problems);
+    const tenantId = requireTenantId(raw.tenantId, 'tenantId', problems);
     const extensionId = requireUuid(raw.extensionId, 'extensionId', problems);
     const extensionNumber = requireExtension(raw.extensionNumber, 'extensionNumber', problems);
     const context = requireContext(raw.context, 'context', problems);

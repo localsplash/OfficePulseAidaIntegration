@@ -21,15 +21,15 @@ test('the base is discovered by name, case-insensitively, and never created', as
     fetchImpl: fakeFetch((url) => {
       seen.push(url);
       if (url.endsWith('/api/v2/meta/bases')) {
-        return json({ list: [{ id: 'b1', title: 'Other' }, { id: 'b2', title: 'aidaadmin' }] });
+        return json({ list: [{ id: 'b1', title: 'Other' }, { id: 'b2', title: 'platformconfig' }] });
       }
-      if (url.includes('/meta/bases/b2/tables')) return json({ list: [{ id: 't1', table_name: 'tenant' }] });
-      return json({ list: [{ id: 'tenant-1' }] });
+      if (url.includes('/meta/bases/b2/tables')) return json({ list: [{ id: 't1', table_name: 'aida_tbl_TenantProfile' }] });
+      return json({ list: [{ id: 'profile-1', iTenantId: 1 }] });
     }),
   });
 
   const records = await client.listRecords('tenant', [{ field: 'id', op: 'eq', value: 'tenant-1' }]);
-  assert.deepEqual(records, [{ id: 'tenant-1' }]);
+  assert.deepEqual(records, [{ id: '1', iTenantId: 1, tenant_id: '1', enabled: true }]);
   // Read-only: no POST is ever issued, so no base is created.
   assert.ok(seen.every((url) => !url.includes('POST')));
 });
@@ -51,7 +51,7 @@ test('duplicate bases are refused rather than guessed between', async () => {
     apiToken: 'tok',
     timeoutMs: 200,
     fetchImpl: fakeFetch(() =>
-      json({ list: [{ id: 'b1', title: 'AidaAdmin' }, { id: 'b2', title: 'aidaadmin' }] }),
+      json({ list: [{ id: 'b1', title: 'PlatformConfig' }, { id: 'b2', title: 'platformconfig' }] }),
     ),
   });
   await assert.rejects(client.listRecords('tenant', []), /Exactly one is required/);
@@ -67,8 +67,8 @@ test('the API token travels in xc-token and never in the URL', async () => {
     fetchImpl: (async (input: string | URL | Request, init?: RequestInit) => {
       if (String(input).includes('super-secret-token')) sawTokenInUrl = true;
       authHeader = (init?.headers as Record<string, string>)?.['xc-token'];
-      if (String(input).endsWith('/api/v2/meta/bases')) return json({ list: [{ id: 'b1', title: 'AidaAdmin' }] });
-      if (String(input).includes('/tables')) return json({ list: [{ id: 't1', table_name: 'tenant' }] });
+      if (String(input).endsWith('/api/v2/meta/bases')) return json({ list: [{ id: 'b1', title: 'PlatformConfig' }] });
+      if (String(input).includes('/tables')) return json({ list: [{ id: 't1', table_name: 'aida_tbl_TenantProfile' }] });
       return json({ list: [] });
     }) as typeof fetch,
   });

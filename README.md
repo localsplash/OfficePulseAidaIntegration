@@ -165,3 +165,20 @@ required.
 - A fallback destination is always tenant-checked: routing one tenant's
   caller into another tenant's extension is refused outright, even when
   that leaves only congestion.
+
+
+### Administration preview before voice provisioning
+
+Set `VOICE_ENABLED=false` on a new preview deployment to run the database-backed
+administration and device APIs before configuring PBX and LiveKit. Runtime MySQL,
+Identity and PlatformConfig remain required, including an explicit
+`RUNTIME_MYSQL_HOST`. ARI, FastAGI, voice dependency probes and room monitoring do
+not start; PBX changes, call commands and LiveKit webhooks return 503, and device
+responses omit room tokens. `/healthz` returns 200 while `/readyz` reports the
+disabled dependencies with 503. Use health for container liveness; readiness still
+means the full voice service is available. The default is `VOICE_ENABLED=true`.
+
+This setting is for initial setup on an isolated deployment. Do not toggle it on
+a server with active calls or connected handset viewers, because room revocation
+monitoring stops. Supply the real voice configuration and restart with
+`VOICE_ENABLED=true` when the PBX and LiveKit project are ready.

@@ -2,10 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { credentialHash, deviceRoutes, type DeviceGrant, type DeviceStore } from '../src/devices/access.js';
+import { voiceAvailability } from '../src/http/voiceAvailability.js';
 import { FakeRuntimeStore } from './helpers/fakeRuntime.js';
 import type { ApiRequest, Route } from '../src/http/httpServer.js';
 
-function fixture() {
+function fixture(voiceEnabled = true) {
   const runtime = new FakeRuntimeStore();
   const call = runtime.seedSession({ tenantId: '1', destinationType: 'EXTENSION', destinationId: 'ext-1', roomName: 'aida-room' });
   const device: DeviceGrant = { id: 'device-1', iTenantId: 1, extensionId: 'ext-1' };
@@ -29,7 +30,7 @@ function fixture() {
   };
   const commandRoute: Route = { method: 'POST', pattern: '/command', handler: async (req) => { state.received = req; return { status: 202, body: { status: 'accepted' } }; } };
   const routes = deviceRoutes({
-    store, runtime, commandRoute,
+    store, runtime, voiceEnabled, commandRoute: voiceAvailability([commandRoute], voiceEnabled)[0]!,
     config: {
       async getExtension(id) { return id === 'ext-1' ? { id, revision: 1, tenantId: '1', extensionNumber: '101', displayName: 'Desk', asteriskContext: 'office-1', enabled: state.extensionEnabled } : undefined; },
       async ringGroupsForExtension() { return state.groups; },
@@ -121,4 +122,18 @@ test('a configured ring-group membership grants only that group destination', as
   await assert.rejects(f.invoke('/v1/calls/:callSessionId', undefined, f.token, 'GET', group.id), { status: 404 });
   f.state.groups = ['group-1'];
   assert.equal((await f.invoke('/v1/calls/:callSessionId', undefined, f.token, 'GET', group.id)).status, 200);
+});
+
+
+test('administration-only mode permits enrollment but omits room tokens and blocks takeover effects', async () => {
+  const f = fixture(false);
+  const detail = await f.invoke('/v1/calls/:callSessionId');
+  assert.equal((detail.body as { livekit?: unknown }).livekit, undefined);
+  const enrollment = await f.invoke('/v1/provisioning/device-enrollments', { iTenantId: 1, extensionId: 'ext-1' }, null, 'POST');
+  assert.equal(enrollment.status, 201);
+  const takeover = await f.invoke('/v1/calls/:callSessionId/commands', {
+    commandType: 'TAKEOVER', expectedCallVersion: 1, idempotencyKey: 'preview',
+  }, f.token, 'POST');
+  assert.equal(takeover.status, 503);
+  assert.equal(f.state.received, undefined);
 });

@@ -7,6 +7,7 @@ import { DeviceRoomGuard } from './devices/roomGuard.js';
 import { Logger } from './logging/logger.js';
 import { Readiness } from './readiness.js';
 import { HttpApi, publicApiOptions } from './http/httpServer.js';
+import { voiceAvailability } from './http/voiceAvailability.js';
 import { buildRoutes } from './http/routes.js';
 import { FastAgiServer } from './agi/fastAgiServer.js';
 import { createBootstrapHandler } from './agi/bootstrapHandler.js';
@@ -91,9 +92,15 @@ async function main(): Promise<void> {
 
   const roomGuard = new DeviceRoomGuard({ rooms: livekit, devices, runtime: runtimeStore,
     config: configRepository, tenantEnabled, logger: logger.child({ component: 'device-room-guard' }) });
-  const roomGuardTimer = setInterval(() => { void roomGuard.sweep(); }, 10_000);
-  roomGuardTimer.unref();
-  void roomGuard.sweep();
+  const roomGuardTimer = config.voiceEnabled
+    ? setInterval(() => { void roomGuard.sweep(); }, 10_000) : undefined;
+  roomGuardTimer?.unref();
+  if (config.voiceEnabled) void roomGuard.sweep();
+  else {
+    for (const dependency of ['ari', 'asterisk-mysql', 'livekit']) {
+      readiness.set(dependency, false, 'Voice connectors disabled; configure PBX and LiveKit');
+    }
+  }
 
   const deviceProvisioning = config.provisioningServer
     ? new HttpDeviceProvisioningService({
@@ -176,7 +183,7 @@ async function main(): Promise<void> {
     pusherCluster: config.handsetConfig.pusherCluster,
   });
 
-  const routes = (() => { const privateRoutes = buildRoutes({
+  const routes = (() => { const privateRoutes = voiceAvailability(buildRoutes({
       extensions,
       ringGroups,
       dids,
@@ -191,10 +198,10 @@ async function main(): Promise<void> {
         logger: logger.child({ component: 'livekit-webhook' }),
       }),
       defaultRingTimeoutSeconds: config.takeover.ringTimeoutSeconds,
-    });
+    }), config.voiceEnabled);
       const commandRoute = privateRoutes.find((r) => r.method === 'POST' && r.pattern.endsWith('/commands'))!;
       return [
-        ...deviceRoutes({ store: devices, runtime: runtimeStore, config: configRepository, tenantEnabled, livekit: config.livekit, commandRoute }),
+        ...deviceRoutes({ store: devices, runtime: runtimeStore, config: configRepository, tenantEnabled, livekit: config.livekit, voiceEnabled: config.voiceEnabled, commandRoute }),
         ...privateRoutes.map((r) => r.pattern.startsWith('/v1/calls/') ? { ...r, pattern: r.pattern.replace('/v1/calls/', '/v1/admin/calls/') } : r),
       ];
     })();
@@ -231,17 +238,21 @@ async function main(): Promise<void> {
   await httpApi.listen(config.http.port, config.http.bind);
   await publicHttpApi.listen(config.http.publicPort, config.http.bind);
   logger.info('http api listening', { port: config.http.port, bind: config.http.bind });
-  ari.start();
-  await fastAgi.listen();
-  logger.info('fastagi listening', { port: config.fastAgi.port, bind: config.fastAgi.bind });
+  if (config.voiceEnabled) {
+    ari.start();
+    await fastAgi.listen();
+    logger.info('fastagi listening', { port: config.fastAgi.port, bind: config.fastAgi.bind });
+  } else {
+    logger.warn('Voice connectors disabled; administration and device APIs available');
+  }
 
   const probe = (): void => {
-    void realtimeStore.ping().then((ok) => readiness.set('asterisk-mysql', ok));
+    if (config.voiceEnabled) void realtimeStore.ping().then((ok) => readiness.set('asterisk-mysql', ok));
     void runtimeStore.ping().then((ok) => readiness.set('runtime-mysql', ok));
     void nocoClient.ping().then((ok) => readiness.set('nocodb', ok));
-    void livekit.ping().then((ok) => readiness.set('livekit', ok));
-    if (notifier) void notifier.ping().then((ok) => readiness.set('pusher', ok));
-    if (deviceProvisioning) {
+    if (config.voiceEnabled) void livekit.ping().then((ok) => readiness.set('livekit', ok));
+    if (config.voiceEnabled && notifier) void notifier.ping().then((ok) => readiness.set('pusher', ok));
+    if (config.voiceEnabled && deviceProvisioning) {
       void deviceProvisioning.ping().then((ok) => readiness.set('provisioning-adapter', ok));
     }
   };

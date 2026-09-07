@@ -45,6 +45,7 @@ export interface DeviceAccessOptions {
   tenantEnabled: (iTenantId: number) => Promise<boolean>;
   livekit: { url: string; apiKey: string; apiSecret: string };
   commandRoute: Route;
+  voiceEnabled?: boolean;
 }
 
 /** Public device routes authenticate opaque credentials; private provisioning remains CIDR gated. */
@@ -133,7 +134,7 @@ export function deviceRoutes(options: DeviceAccessOptions): Route[] {
       method: 'GET', pattern: '/v1/calls/:callSessionId', trusted: false,
       handler: async (req) => {
         const { device, call } = await scopedCall(req);
-        const livekit = call.roomName && !call.endedAt ? {
+        const livekit = options.voiceEnabled !== false && call.roomName && !call.endedAt ? {
           url: options.livekit.url,
           token: signAccessToken(options.livekit.apiKey, options.livekit.apiSecret, {
             identity: `handset-${device.id}`, ttlSeconds: 120,

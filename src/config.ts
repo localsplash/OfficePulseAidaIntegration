@@ -5,6 +5,8 @@ export type RuntimeEnv = 'production' | 'development' | 'test';
 
 export interface AppConfig {
   env: RuntimeEnv;
+  /** Explicit administration-only mode; calling requires configured voice connectors. */
+  voiceEnabled: boolean;
   logLevel: 'debug' | 'info' | 'warn' | 'error';
   officePulseInstanceId: string;
   fastAgi: {
@@ -166,6 +168,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     problems.push(`NODE_ENV must be production, development, or test; got '${env.NODE_ENV}'`);
   }
   const isProd = runtimeEnv === 'production';
+  if (env.VOICE_ENABLED !== undefined && !['true', 'false'].includes(env.VOICE_ENABLED)) {
+    problems.push('VOICE_ENABLED must be true or false');
+  }
+  const voiceEnabled = env.VOICE_ENABLED !== 'false';
   /** In production a value must be supplied; elsewhere a dev default stands in. */
   const required = (devFallback: string): string | undefined => (isProd ? undefined : devFallback);
 
@@ -180,11 +186,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     problems.push('TRUSTED_SERVER_CIDRS must be non-empty in production');
   }
 
+  const voice = (key: string, fallback: string): string =>
+    voiceEnabled ? str(env, key, problems, required(fallback)) : '';
+
   const pusherAppId = optStr(env, 'PUSHER_APP_ID');
-  const asteriskHost = str(env, 'MYSQL_HOST', problems, required('127.0.0.1'));
+  const asteriskHost = voice('MYSQL_HOST', '127.0.0.1');
 
   const config: AppConfig = {
     env: runtimeEnv,
+    voiceEnabled,
     logLevel,
     officePulseInstanceId: str(env, 'OFFICEPULSE_INSTANCE_ID', problems, required('officepulse-dev')),
     fastAgi: {
@@ -204,22 +214,23 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       trustedProxyCidrs,
     },
     ari: {
-      url: str(env, 'ARI_URL', problems, required('http://127.0.0.1:8088/ari')),
-      username: str(env, 'ARI_USERNAME', problems, required('aida')),
-      password: str(env, 'ARI_PASSWORD', problems, required('dev-only')),
+      url: voice('ARI_URL', 'http://127.0.0.1:8088/ari'),
+      username: voice('ARI_USERNAME', 'aida'),
+      password: voice('ARI_PASSWORD', 'dev-only'),
       app: env.ARI_APP ?? 'aida',
     },
     asteriskMysql: {
       host: asteriskHost,
       port: int(env, 'MYSQL_PORT', 3306, problems, 1, 65535),
-      user: str(env, 'MYSQL_USER', problems, required('aida')),
-      password: str(env, 'MYSQL_PASSWORD', problems, required('dev-only')),
-      database: str(env, 'MYSQL_DATABASE', problems, required('asterisk')),
+      user: voice('MYSQL_USER', 'aida'),
+      password: voice('MYSQL_PASSWORD', 'dev-only'),
+      database: voice('MYSQL_DATABASE', 'asterisk'),
     },
     runtimeMysql: {
       // The runtime database usually lives on LSAidaOffice01 rather than
       // beside Asterisk, but defaults to the same server when unset.
-      host: env.RUNTIME_MYSQL_HOST ?? asteriskHost,
+      host: voiceEnabled ? (env.RUNTIME_MYSQL_HOST ?? asteriskHost)
+        : str(env, 'RUNTIME_MYSQL_HOST', problems, required('127.0.0.1')),
       port: int(env, 'RUNTIME_MYSQL_PORT', 3306, problems, 1, 65535),
       user: str(env, 'RUNTIME_MYSQL_USER', problems, required('aida')),
       password: str(env, 'RUNTIME_MYSQL_PASSWORD', problems, required('dev-only')),
@@ -232,11 +243,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       timeoutMs: int(env, 'NOCODB_TIMEOUT_MS', 4_000, problems, 100),
     },
     livekit: {
-      url: str(env, 'LIVEKIT_URL', problems, required('ws://127.0.0.1:7880')),
-      apiKey: str(env, 'LIVEKIT_API_KEY', problems, required('devkey')),
-      apiSecret: str(env, 'LIVEKIT_API_SECRET', problems, required('dev-only-secret')),
+      url: voice('LIVEKIT_URL', 'ws://127.0.0.1:7880'),
+      apiKey: voice('LIVEKIT_API_KEY', 'devkey'),
+      apiSecret: voice('LIVEKIT_API_SECRET', 'dev-only-secret'),
       agentName: env.LIVEKIT_AGENT_NAME ?? 'aida-prime',
-      sipHost: str(env, 'LIVEKIT_SIP_HOST', problems, required('sip.livekit.local')),
+      sipHost: voice('LIVEKIT_SIP_HOST', 'sip.livekit.local'),
       timeoutMs: int(env, 'LIVEKIT_TIMEOUT_MS', 5_000, problems, 100),
     },
     pusher: pusherAppId

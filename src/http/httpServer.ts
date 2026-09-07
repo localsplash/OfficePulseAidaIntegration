@@ -33,7 +33,7 @@ export interface Route {
   /**
    * CIDR-protected private route (the default). Set false only for a route
    * that authenticates a caller from outside the private LAN by its own
-   * signature — currently just the LiveKit webhook. Rate limiting and the
+   * bearer token or webhook signature. Rate limiting and the
    * body cap still apply.
    */
   trusted?: boolean;
@@ -50,6 +50,11 @@ export interface HttpApiOptions {
   rateLimitPerMinute: number;
   routes: Route[];
   now?: () => number;
+}
+
+/** Public ingress cannot select a private handler, regardless of proxy CIDRs. */
+export function publicApiOptions(options: HttpApiOptions): HttpApiOptions {
+  return { ...options, trustedServerCidrs: [], routes: options.routes.filter((route) => route.trusted === false) };
 }
 
 interface CompiledRoute extends Route {
@@ -178,8 +183,8 @@ export class HttpApi {
 
       const route = this.routes.find((candidate) => candidate.method === method && candidate.regex.test(path));
 
-      // CIDR gating applies to every route except one that carries its own
-      // signature. An unknown path is gated as if it were private, so a
+      // CIDR gating applies to every route except device bearer and signed
+      // webhook routes. An unknown path is gated as if it were private, so a
       // caller outside the LAN cannot probe for route names.
       if ((route?.trusted ?? true) && !ipInCidrs(clientIp, this.opts.trustedServerCidrs)) {
         log.warn('request outside trusted CIDRs denied', { clientIp });

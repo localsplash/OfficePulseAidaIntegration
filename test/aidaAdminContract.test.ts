@@ -151,12 +151,17 @@ test("AidaAdmin's current DID payload still works, without a local fallback", as
 });
 
 test('the extended DID payload persists the tenant-scoped fallback projection', async () => {
-  const { dids, runtime } = services();
+  const { dids, runtime, extensions, store } = services();
+  await extensions.create(body('provisionExtension') as never);
   const result = await dids.provision(DID_ROUTE_ID_2, body('provisionDidWithFallback') as never);
   assert.equal(result.fallbackPersisted, true);
+  const rows = await store.getDialplan('aida-inbound', '+15559870002');
+  const agi = rows.findIndex((row) => row.app === 'AGI');
+  assert.ok(rows.findIndex((row) => row.appdata === 'AIDA_FALLBACK_CONTEXT=office-main') < agi);
+  assert.ok(rows.some((row) => row.appdata.startsWith('AIDA_FALLBACK_EXTENSION=')));
   assert.deepEqual(runtime.fallbacks.get(DID_ROUTE_ID_2), {
     didRouteId: DID_ROUTE_ID_2,
-    tenantId: '11111111-1111-4111-8111-111111111111',
+    tenantId: '2',
     didE164: '+15559870002',
     destinationType: 'EXTENSION',
     destinationId: EXT_ID,

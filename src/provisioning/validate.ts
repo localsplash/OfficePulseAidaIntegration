@@ -16,6 +16,16 @@ const REQUEST_ID_RE = /^[a-zA-Z0-9_.:-]{1,120}$/;
 const CALLERID_NAME_RE = /^[^"<>\\\n\r]{1,60}$/;
 const PROFILE_RE = /^[a-zA-Z0-9_.-]{1,60}$/;
 
+/** Canonical Identity business ID. Domain object UUIDs remain unchanged. */
+export function requireTenantId(value: unknown, field: string, problems: string[]): string {
+  const text = typeof value === 'number' ? String(value) : value;
+  if (typeof text !== 'string' || !/^[1-9][0-9]*$/.test(text) || !Number.isSafeInteger(Number(text))) {
+    problems.push(`${field} must be a positive canonical Identity tenant ID`);
+    return '';
+  }
+  return text;
+}
+
 export function requireUuid(value: unknown, field: string, problems: string[]): string {
   if (typeof value !== 'string' || !UUID_RE.test(value)) {
     problems.push(`${field} must be a UUID`);

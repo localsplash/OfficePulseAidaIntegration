@@ -10,6 +10,7 @@ import {
   requireContext,
   requireExtension,
   requireUuid,
+  requireTenantId,
   throwIfProblems,
 } from './validate.js';
 
@@ -68,7 +69,7 @@ export class RingGroupProvisioningService {
   async provision(ringGroupIdRaw: string, raw: RingGroupInput): Promise<{ status: string }> {
     const problems: string[] = [];
     const ringGroupId = requireUuid(ringGroupIdRaw, 'ringGroupId', problems);
-    const tenantId = requireUuid(raw.tenantId, 'tenantId', problems);
+    const tenantId = requireTenantId(raw.tenantId, 'tenantId', problems);
     const virtualExtension = requireExtension(raw.virtualExtension, 'virtualExtension', problems);
     const context = requireContext(raw.context, 'context', problems);
     const ringTimeoutSeconds = intInRange(raw.ringTimeoutSeconds, 'ringTimeoutSeconds', 20, 5, 120, problems);

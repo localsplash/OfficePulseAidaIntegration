@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { LiveKitWebhookHandler, callSessionIdFromRoom } from '../src/livekit/webhookHandler.js';
 import { signAccessToken, verifyWebhook } from '../src/livekit/token.js';
 import { LiveKitClient, buildCallMetadata } from '../src/livekit/client.js';
+import type { LiveKitWebhookUpdate, LiveKitWebhookResult } from '../src/runtime/store.js';
 import { FakeRuntimeStore } from './helpers/fakeRuntime.js';
 import { captureLogger } from './helpers/capture.js';
 
@@ -20,10 +21,40 @@ function signBody(body: string, opts: { key?: string; secret?: string; digest?: 
   });
 }
 
-function makeHandler(): { handler: LiveKitWebhookHandler; runtime: FakeRuntimeStore; lines: string[] } {
+/** Transactional in-memory fixture; production behavior is exercised against MySQL. */
+class WebhookRuntime extends FakeRuntimeStore {
+  async applyLiveKitWebhook(delivery: LiveKitWebhookUpdate): Promise<LiveKitWebhookResult> {
+    const session = this.sessions.get(delivery.callSessionId);
+    if (!session || session.roomName !== delivery.roomName) return 'unknown-room';
+    const snapshot = structuredClone({ sessions: this.sessions, participants: this.participants,
+      events: this.events, deliveries: this.deliveries });
+    try {
+      if (!await this.recordWebhookDelivery('livekit', delivery.deliveryId)) return 'duplicate';
+      const participant = delivery.participant;
+      if (delivery.eventType === 'participant_joined' && participant) {
+        await this.upsertParticipant(delivery.callSessionId, { participantSid: participant.sid,
+          identity: participant.identity, kind: participant.kind });
+        if (participant.isAgent && !session.endedAt) session.agentParticipantSid = participant.sid;
+      } else if (delivery.eventType === 'participant_left' && participant) {
+        await this.markParticipantLeft(delivery.callSessionId, participant.sid);
+        if (session.agentParticipantSid === participant.sid) session.agentParticipantSid = undefined;
+      } else if (delivery.eventType === 'room_finished') {
+        session.agentParticipantSid = undefined;
+      }
+      await this.appendCallEvent(delivery.callSessionId, { eventType: `livekit.${delivery.eventType}`,
+        payload: { participantSid: participant?.sid, identity: participant?.identity } });
+      return 'applied';
+    } catch (error) {
+      Object.assign(this, snapshot);
+      throw error;
+    }
+  }
+}
+
+function makeHandler(): { handler: LiveKitWebhookHandler; runtime: WebhookRuntime; lines: string[] } {
   const { logger, lines } = captureLogger();
-  const runtime = new FakeRuntimeStore();
-  runtime.seedSession({ id: CALL_SESSION_ID });
+  const runtime = new WebhookRuntime();
+  runtime.seedSession({ id: CALL_SESSION_ID, roomName: `aida-${CALL_SESSION_ID}` });
   return {
     handler: new LiveKitWebhookHandler({ apiKey: API_KEY, apiSecret: API_SECRET, runtime, logger }),
     runtime,
@@ -125,8 +156,9 @@ test('participant_left and room_finished update the session', async () => {
   const finished = event({ id: 'evt-3', event: 'room_finished', participant: undefined });
   await handler.handle(Buffer.from(finished), `Bearer ${signBody(finished)}`);
   const session = await runtime.getCallSession(CALL_SESSION_ID);
-  assert.equal(session?.state, 'room-finished');
-  assert.ok(session?.endedAt);
+  assert.notEqual(session?.state, 'room-finished');
+  assert.equal(session?.endedAt, undefined);
+
 });
 
 test('a webhook for an unknown room is acknowledged without inventing state', async () => {
@@ -197,4 +229,41 @@ test('the LiveKit client signs REST calls and reports failures as upstream error
     }),
     /returned 500/,
   );
+});
+
+test('an effect failure reaches HTTP error handling and a retry can apply the delivery', async () => {
+  const { handler, runtime } = makeHandler();
+  const body = event();
+  runtime.failOn = 'appendCallEvent';
+  await assert.rejects(handler.handle(Buffer.from(body), `Bearer ${signBody(body)}`), /forced failure/);
+  assert.equal(runtime.deliveries.size, 0);
+  assert.equal(runtime.participants.size, 0);
+  runtime.failOn = null;
+  assert.equal((await handler.handle(Buffer.from(body), `Bearer ${signBody(body)}`)).accepted, true);
+  assert.equal(runtime.eventTypes(CALL_SESSION_ID).length, 1);
+});
+
+test('signature verification precedes every database operation', async () => {
+  const { handler, runtime } = makeHandler();
+  let calls = 0;
+  runtime.applyLiveKitWebhook = async () => { calls += 1; throw new Error('database should not be reached'); };
+  const body = event();
+  assert.equal((await handler.handle(Buffer.from(body), 'Bearer invalid')).accepted, false);
+  assert.equal(calls, 0);
+});
+
+test('a valid-looking room without a matching persisted call creates no receipt or event', async () => {
+  const { handler, runtime } = makeHandler();
+  const body = event({ room: { name: 'aida-99999999-2222-4333-8444-555555555555' } });
+  assert.equal((await handler.handle(Buffer.from(body), `Bearer ${signBody(body)}`)).accepted, true);
+  assert.equal(runtime.deliveries.size, 0);
+  assert.equal(runtime.events.size, 0);
+});
+
+test('a signed non-object body is rejected before storage', async () => {
+  const { handler, runtime } = makeHandler();
+  for (const body of ['null', '[]', '42']) {
+    assert.equal((await handler.handle(Buffer.from(body), `Bearer ${signBody(body)}`)).accepted, false);
+  }
+  assert.equal(runtime.deliveries.size, 0);
 });

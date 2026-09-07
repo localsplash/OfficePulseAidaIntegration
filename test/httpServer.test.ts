@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { HttpApi } from '../src/http/httpServer.js';
+import { HttpApi, publicApiOptions } from '../src/http/httpServer.js';
 import { Readiness } from '../src/readiness.js';
 import { ValidationError } from '../src/errors.js';
 import { captureLogger } from './helpers/capture.js';
@@ -127,4 +127,23 @@ test('unknown v1 routes 404 inside the trust boundary', async () => {
   await withApi(async (base) => {
     assert.equal((await fetch(`${base}/v1/nothing`, { method: 'POST' })).status, 404);
   });
+});
+
+test('public listener cannot dispatch private provisioning even from a trusted proxy/server', async () => {
+  let privateCalls = 0;
+  const api = new HttpApi(publicApiOptions({ logger: captureLogger().logger, readiness: new Readiness(),
+    trustedServerCidrs: ['127.0.0.1/32', '10.0.0.0/8'], trustedProxyCidrs: ['127.0.0.1/32'],
+    maxBodyBytes: 1024, rateLimitPerMinute: 100,
+    routes: [
+      { method: 'POST', pattern: '/v1/provisioning/extensions', handler: async () => { privateCalls++; return { status: 201 }; } },
+      { method: 'POST', pattern: '/v1/devices/enroll', trusted: false, handler: async () => ({ status: 401 }) },
+    ],
+  }));
+  await api.listen(0, '127.0.0.1');
+  try {
+    const base = `http://127.0.0.1:${api.address()?.port}`;
+    assert.equal((await fetch(`${base}/v1/provisioning/extensions`, { method: 'POST', headers: { 'x-forwarded-for': '10.0.0.5' } })).status, 403);
+    assert.equal((await fetch(`${base}/v1/devices/enroll`, { method: 'POST' })).status, 401);
+    assert.equal(privateCalls, 0);
+  } finally { await api.close(); }
 });

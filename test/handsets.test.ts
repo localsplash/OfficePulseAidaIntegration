@@ -12,7 +12,7 @@ import { NotFoundError, UpstreamError, ValidationError } from '../src/errors.js'
 import { FakeRealtimeStore } from './helpers/fakeStore.js';
 import { captureLogger } from './helpers/capture.js';
 
-const TENANT = '11111111-1111-4111-8111-111111111111';
+const TENANT = '2';
 const EXT_ID = '22222222-2222-4222-8222-222222222222';
 const DEVICE_ID = '88888888-8888-4888-8888-888888888888';
 

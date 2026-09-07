@@ -2,12 +2,12 @@
 
 Layer Aida onto OfficePulse without forking or modifying Asterisk source.
 
-A TypeScript/Node.js service on **LSAidaOffice01**. For the POC it is both
+A TypeScript/Node.js service for the office platform. The first combined deployment target is **dockerappvm01-dev**. For the POC it is both
 the **call orchestrator** and the Asterisk adapter — there is no
 AidaControl service (issue #9). It provides:
 
 1. **Inbound call orchestration** — FastAGI resolves the DID route and
-   assistant profile directly from AidaAdmin's NocoDB base, pins the
+   assistant profile directly from the shared PlatformConfig NocoDB base, pins the
    configuration it used onto a local call session, creates the LiveKit
    room, dispatches the predefined `aida-prime` agent, and hands Asterisk
    the routing variables.
@@ -25,16 +25,14 @@ writer:
 
 | Data set | Writer | This service |
 |---|---|---|
-| NocoDB `AidaAdmin` base | AidaAdmin | **reads only** |
+| NocoDB `PlatformConfig` voice tables | AidaAdmin | **reads only** |
 | Asterisk Realtime MySQL | this service | **writes** |
-| `aida_officepulse` runtime MySQL | this service | **writes** |
-| `aida_officepulse` (AidaAdmin's view) | — | AidaAdmin reads via a read-only account; commands stay HTTP actions |
+| `aida_db` runtime MySQL | this service | **writes** |
+| `aida_db` (AidaAdmin's view) | — | AidaAdmin reads via a read-only account; commands stay HTTP actions |
 
-Normative contract: the
-[Aida Office POC — Database and Input Interface Specification](https://github.com/localsplash/AidaInfrastructureSetupInstructions/blob/main/docs/AIDA_POC_DATABASE_AND_INTERFACE_SPECIFICATION.md),
-as superseded for the POC by
-[issue #9](https://github.com/localsplash/OfficePulseAidaIntegration/issues/9)
-wherever the two differ on AidaControl.
+The [platform API and cutover contract](docs/PLATFORM_API.md) defines canonical
+Identity tenant IDs, device authentication, startup migrations and the separate
+public/private HTTP listeners. It supersedes conflicting legacy interface text.
 
 ## Project invariant
 
@@ -49,7 +47,7 @@ drain is aborted and the caller stays with Aida.
 inbound DID (Realtime rows, written by this service's provisioning API)
   -> recording disclosure (always, before FastAGI/LiveKit)
   -> AGI(agi://LSAidaOffice01:4573/bootstrap)
-       -> read DID route + assistant profile from the NocoDB AidaAdmin base
+       -> read DID route + assistant profile from the NocoDB PlatformConfig base
        -> persist call_session with the configuration ids AND revisions pinned
        -> create LiveKit room, dispatch `aida-prime`, notify the handset
        -> sets AIDA_DISPOSITION + routing channel variables
@@ -74,20 +72,12 @@ operator emergency fallback. If this service or ARI is down entirely, the
 dialplan alone still routes: disclosure → failure prompt → destination.
 Media never traverses this service.
 
-## Network (private LAN only — see `deploy/firewall-matrix.md`)
+## Network
 
-| Port | Direction | Peer | Purpose |
-|------|-----------|------|---------|
-| 4573/tcp | inbound | OfficePulse | FastAGI bootstrap |
-| 8085/tcp | inbound | AidaAdmin backend, AidaHandset | provisioning + call-control API (CIDR-gated) |
-| 8088/tcp | outbound | OfficePulse | ARI REST + events WebSocket |
-| 3306/tcp | outbound | OfficePulse | Asterisk Realtime MySQL + `aida_officepulse` |
-| 443/tcp | outbound | NocoDB, LiveKit Cloud, Pusher, provisioning server | configuration reads, room/agent control, notifications, handset provisioning |
-| 8085/tcp | inbound | LiveKit Cloud | signed webhooks — the one route not CIDR-gated |
-
-No ARI, MySQL, or FastAGI exposure beyond the private LAN — ever. The
-LiveKit webhook is the single inbound exception and is authenticated by
-signature over the raw request body rather than by network position.
+Private HTTP `8085` serves AidaAdmin provisioning and administration. Public
+HTTP `8086` serves device bearer APIs and signed LiveKit webhooks through HTTPS
+at NPM. FastAGI `4573`, ARI and MySQL stay private. See the
+[firewall matrix](deploy/firewall-matrix.md) and [API contract](docs/PLATFORM_API.md).
 
 ## Development
 
@@ -136,7 +126,7 @@ required.
 ## Deployment
 
 - `deploy/sql/schema.sql` — bookkeeping tables (in the Realtime DB).
-- `deploy/sql/runtime-schema.sql` — the `aida_officepulse` runtime database
+- `deploy/sql/runtime-schema.sql` — the `aida_db` runtime database
   (call sessions/events, control commands, LiveKit participants, webhook
   deliveries, provisioning operations, dependency status, DID fallback
   projection). No transcript table exists by design.
@@ -175,3 +165,20 @@ required.
 - A fallback destination is always tenant-checked: routing one tenant's
   caller into another tenant's extension is refused outright, even when
   that leaves only congestion.
+
+
+### Administration preview before voice provisioning
+
+Set `VOICE_ENABLED=false` on a new preview deployment to run the database-backed
+administration and device APIs before configuring PBX and LiveKit. Runtime MySQL,
+Identity and PlatformConfig remain required, including an explicit
+`RUNTIME_MYSQL_HOST`. ARI, FastAGI, voice dependency probes and room monitoring do
+not start; PBX changes, call commands and LiveKit webhooks return 503, and device
+responses omit room tokens. `/healthz` returns 200 while `/readyz` reports the
+disabled dependencies with 503. Use health for container liveness; readiness still
+means the full voice service is available. The default is `VOICE_ENABLED=true`.
+
+This setting is for initial setup on an isolated deployment. Do not toggle it on
+a server with active calls or connected handset viewers, because room revocation
+monitoring stops. Supply the real voice configuration and restart with
+`VOICE_ENABLED=true` when the PBX and LiveKit project are ready.

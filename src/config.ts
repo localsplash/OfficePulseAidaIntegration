@@ -5,6 +5,8 @@ export type RuntimeEnv = 'production' | 'development' | 'test';
 
 export interface AppConfig {
   env: RuntimeEnv;
+  /** Explicit administration-only mode; calling requires configured voice connectors. */
+  voiceEnabled: boolean;
   logLevel: 'debug' | 'info' | 'warn' | 'error';
   officePulseInstanceId: string;
   fastAgi: {
@@ -17,6 +19,7 @@ export interface AppConfig {
   };
   http: {
     port: number;
+    publicPort: number;
     bind: string;
     maxBodyBytes: number;
     rateLimitPerMinute: number;
@@ -91,6 +94,7 @@ export interface AppConfig {
     /** PJSIP endpoint name of the existing LiveKit Cloud SIP trunk. */
     livekitTrunkEndpoint?: string;
   };
+  identity: { baseUrl: string; clientSecret?: string };
   call: {
     defaultLocale: string;
     /** Operator emergency fallback; used only when a DID has no projection. */
@@ -164,6 +168,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     problems.push(`NODE_ENV must be production, development, or test; got '${env.NODE_ENV}'`);
   }
   const isProd = runtimeEnv === 'production';
+  if (env.VOICE_ENABLED !== undefined && !['true', 'false'].includes(env.VOICE_ENABLED)) {
+    problems.push('VOICE_ENABLED must be true or false');
+  }
+  const voiceEnabled = env.VOICE_ENABLED !== 'false';
   /** In production a value must be supplied; elsewhere a dev default stands in. */
   const required = (devFallback: string): string | undefined => (isProd ? undefined : devFallback);
 
@@ -178,11 +186,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     problems.push('TRUSTED_SERVER_CIDRS must be non-empty in production');
   }
 
+  const voice = (key: string, fallback: string): string =>
+    voiceEnabled ? str(env, key, problems, required(fallback)) : '';
+
   const pusherAppId = optStr(env, 'PUSHER_APP_ID');
-  const asteriskHost = str(env, 'MYSQL_HOST', problems, required('127.0.0.1'));
+  const asteriskHost = voice('MYSQL_HOST', '127.0.0.1');
 
   const config: AppConfig = {
     env: runtimeEnv,
+    voiceEnabled,
     logLevel,
     officePulseInstanceId: str(env, 'OFFICEPULSE_INSTANCE_ID', problems, required('officepulse-dev')),
     fastAgi: {
@@ -194,6 +206,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     },
     http: {
       port: int(env, 'HTTP_PORT', 8085, problems, 1, 65535),
+      publicPort: int(env, 'PUBLIC_HTTP_PORT', 8086, problems, 1, 65535),
       bind: env.HTTP_BIND ?? '0.0.0.0',
       maxBodyBytes: int(env, 'HTTP_MAX_BODY_BYTES', 64 * 1024, problems, 256),
       rateLimitPerMinute: int(env, 'HTTP_RATE_LIMIT_PER_MINUTE', 300, problems),
@@ -201,39 +214,40 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       trustedProxyCidrs,
     },
     ari: {
-      url: str(env, 'ARI_URL', problems, required('http://127.0.0.1:8088/ari')),
-      username: str(env, 'ARI_USERNAME', problems, required('aida')),
-      password: str(env, 'ARI_PASSWORD', problems, required('dev-only')),
+      url: voice('ARI_URL', 'http://127.0.0.1:8088/ari'),
+      username: voice('ARI_USERNAME', 'aida'),
+      password: voice('ARI_PASSWORD', 'dev-only'),
       app: env.ARI_APP ?? 'aida',
     },
     asteriskMysql: {
       host: asteriskHost,
       port: int(env, 'MYSQL_PORT', 3306, problems, 1, 65535),
-      user: str(env, 'MYSQL_USER', problems, required('aida')),
-      password: str(env, 'MYSQL_PASSWORD', problems, required('dev-only')),
-      database: str(env, 'MYSQL_DATABASE', problems, required('asterisk')),
+      user: voice('MYSQL_USER', 'aida'),
+      password: voice('MYSQL_PASSWORD', 'dev-only'),
+      database: voice('MYSQL_DATABASE', 'asterisk'),
     },
     runtimeMysql: {
       // The runtime database usually lives on LSAidaOffice01 rather than
       // beside Asterisk, but defaults to the same server when unset.
-      host: env.RUNTIME_MYSQL_HOST ?? asteriskHost,
+      host: voiceEnabled ? (env.RUNTIME_MYSQL_HOST ?? asteriskHost)
+        : str(env, 'RUNTIME_MYSQL_HOST', problems, required('127.0.0.1')),
       port: int(env, 'RUNTIME_MYSQL_PORT', 3306, problems, 1, 65535),
       user: str(env, 'RUNTIME_MYSQL_USER', problems, required('aida')),
       password: str(env, 'RUNTIME_MYSQL_PASSWORD', problems, required('dev-only')),
-      database: env.RUNTIME_MYSQL_DATABASE ?? 'aida_officepulse',
+      database: env.RUNTIME_MYSQL_DATABASE ?? 'aida_db',
     },
     nocodb: {
       baseUrl: str(env, 'NOCODB_BASE_URL', problems, required('http://127.0.0.1:8080')),
       apiToken: str(env, 'NOCODB_API_TOKEN', problems, required('dev-only')),
-      baseName: env.NOCODB_BASE_NAME ?? 'AidaAdmin',
+      baseName: env.NOCODB_BASE_NAME ?? 'PlatformConfig',
       timeoutMs: int(env, 'NOCODB_TIMEOUT_MS', 4_000, problems, 100),
     },
     livekit: {
-      url: str(env, 'LIVEKIT_URL', problems, required('ws://127.0.0.1:7880')),
-      apiKey: str(env, 'LIVEKIT_API_KEY', problems, required('devkey')),
-      apiSecret: str(env, 'LIVEKIT_API_SECRET', problems, required('dev-only-secret')),
+      url: voice('LIVEKIT_URL', 'ws://127.0.0.1:7880'),
+      apiKey: voice('LIVEKIT_API_KEY', 'devkey'),
+      apiSecret: voice('LIVEKIT_API_SECRET', 'dev-only-secret'),
       agentName: env.LIVEKIT_AGENT_NAME ?? 'aida-prime',
-      sipHost: str(env, 'LIVEKIT_SIP_HOST', problems, required('sip.livekit.local')),
+      sipHost: voice('LIVEKIT_SIP_HOST', 'sip.livekit.local'),
       timeoutMs: int(env, 'LIVEKIT_TIMEOUT_MS', 5_000, problems, 100),
     },
     pusher: pusherAppId
@@ -270,6 +284,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       defaultMohClass: env.TAKEOVER_DEFAULT_MOH_CLASS ?? 'default',
       livekitTrunkEndpoint: optStr(env, 'LIVEKIT_TRUNK_ENDPOINT'),
     },
+    identity: { baseUrl: str(env, 'IDENTITY_BASE_URL', problems, required('http://identity:3200')), clientSecret: optStr(env, 'IDENTITY_CLIENT_SECRET') },
     call: {
       defaultLocale: env.CALL_DEFAULT_LOCALE ?? 'en-US',
       operatorFallbackContext: optStr(env, 'OPERATOR_FALLBACK_CONTEXT'),

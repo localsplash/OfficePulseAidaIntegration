@@ -143,8 +143,12 @@ export function buildRoutes(deps: RouteDeps): Route[] {
           commandType,
           payload: body,
           status: 'in-progress',
-        });
+        }, typeof body.expectedCallVersion === 'number' ? body.expectedCallVersion : undefined);
         if (!claim.claimed) {
+          if (claim.existing?.status === 'failed') return {
+            status: 409,
+            body: { status: 'failed', error: 'The previous command failed; refresh before starting a new command.', duplicate: true },
+          };
           return {
             status: 200,
             body: { status: claim.existing?.status ?? 'in-progress', result: claim.existing?.result, duplicate: true },

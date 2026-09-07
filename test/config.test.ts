@@ -5,6 +5,7 @@ import { ConfigError } from '../src/errors.js';
 
 const PROD_ENV = {
   NODE_ENV: 'production',
+  IDENTITY_BASE_URL: 'https://identity.example.test',
   OFFICEPULSE_INSTANCE_ID: 'op-1',
   TRUSTED_SERVER_CIDRS: '10.0.0.0/24',
   ARI_URL: 'http://10.0.0.2:8088/ari',
@@ -23,6 +24,26 @@ const PROD_ENV = {
   LIVEKIT_API_SECRET: 'secret',
   LIVEKIT_SIP_HOST: 'sip.livekit.cloud',
 };
+
+test('administration-only production requires real platform services but no voice credentials', () => {
+  const env = {
+    NODE_ENV: 'production', VOICE_ENABLED: 'false',
+    IDENTITY_BASE_URL: PROD_ENV.IDENTITY_BASE_URL,
+    OFFICEPULSE_INSTANCE_ID: PROD_ENV.OFFICEPULSE_INSTANCE_ID,
+    TRUSTED_SERVER_CIDRS: PROD_ENV.TRUSTED_SERVER_CIDRS,
+    RUNTIME_MYSQL_HOST: 'runtime-db', RUNTIME_MYSQL_USER: 'runtime', RUNTIME_MYSQL_PASSWORD: 'pw',
+    NOCODB_BASE_URL: PROD_ENV.NOCODB_BASE_URL, NOCODB_API_TOKEN: PROD_ENV.NOCODB_API_TOKEN,
+  };
+  const config = loadConfig(env);
+  assert.equal(config.voiceEnabled, false);
+  assert.equal(config.ari.password, '');
+  assert.equal(config.livekit.apiSecret, '');
+  assert.equal(config.asteriskMysql.host, '');
+  assert.throws(() => loadConfig({ ...env, RUNTIME_MYSQL_HOST: '' }), ConfigError);
+  assert.throws(() => loadConfig({ ...env, NOCODB_API_TOKEN: '' }), ConfigError);
+  assert.throws(() => loadConfig({ ...env, VOICE_ENABLED: 'true' }), ConfigError);
+  assert.throws(() => loadConfig({ ...PROD_ENV, VOICE_ENABLED: 'typo' }), ConfigError);
+});
 
 test('development config loads with defaults', () => {
   const config = loadConfig({ NODE_ENV: 'development' });
@@ -82,7 +103,7 @@ test('production requires the dependencies this service now orchestrates itself'
 test('no AidaControl configuration is read or required any more', () => {
   const config = loadConfig({ ...PROD_ENV, AIDACONTROL_BASE_URL: 'http://stale:9010' });
   assert.equal(JSON.stringify(config).includes('stale:9010'), false);
-  assert.equal(config.nocodb.baseName, 'AidaAdmin');
+  assert.equal(config.nocodb.baseName, 'PlatformConfig');
   assert.equal(config.livekit.agentName, 'aida-prime');
 });
 

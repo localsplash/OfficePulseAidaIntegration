@@ -6,7 +6,7 @@ import { ValidationError } from '../src/errors.js';
 import { FakeRealtimeStore } from './helpers/fakeStore.js';
 import { captureLogger } from './helpers/capture.js';
 
-const TENANT = '11111111-1111-4111-8111-111111111111';
+const TENANT = '2';
 const RG_ID = '44444444-4444-4444-8444-444444444444';
 
 async function setup(): Promise<{

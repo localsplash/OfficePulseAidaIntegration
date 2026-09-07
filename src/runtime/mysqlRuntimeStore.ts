@@ -1,5 +1,7 @@
 import mysql from 'mysql2/promise';
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
+import { ConflictError, NotFoundError } from '../errors.js';
 import type {
   CallEventRecord,
   CallSessionRecord,
@@ -9,6 +11,8 @@ import type {
   NewCallSession,
   ProvisioningOperationRecord,
   RuntimeStore,
+  LiveKitWebhookUpdate,
+  LiveKitWebhookResult,
 } from './store.js';
 import type { DestinationType } from '../nocodb/configRepository.js';
 
@@ -110,7 +114,9 @@ export class MysqlRuntimeStore implements RuntimeStore {
       password: config.password,
       database: config.database,
       connectionLimit: config.connectionLimit ?? 5,
+      timezone: 'Z',
     });
+    this.pool.on('connection', (connection) => { connection.query("SET time_zone = '+00:00'"); });
   }
 
   async close(): Promise<void> {
@@ -188,12 +194,12 @@ export class MysqlRuntimeStore implements RuntimeStore {
       endedAt: 'ended_at',
     };
     const sets: string[] = [];
-    const params: Array<string | null> = [];
+    const params: Array<string | Date | null> = [];
     for (const [key, column] of Object.entries(columns)) {
       const value = (fields as Record<string, string | undefined>)[key];
       if (value !== undefined) {
         sets.push(`${column} = ?`);
-        params.push(value);
+        params.push(key === 'endedAt' ? new Date(value) : value);
       }
     }
     if (sets.length === 0) return;
@@ -209,6 +215,7 @@ export class MysqlRuntimeStore implements RuntimeStore {
     const conn = await this.pool.getConnection();
     try {
       await conn.beginTransaction();
+      await conn.execute('SELECT id FROM call_session WHERE id = ? FOR UPDATE', [callSessionId]);
       const [rows] = await conn.execute(
         'SELECT COALESCE(MAX(sequence_number), 0) AS seq FROM call_event WHERE call_session_id = ? FOR UPDATE',
         [callSessionId],
@@ -248,50 +255,60 @@ export class MysqlRuntimeStore implements RuntimeStore {
     );
   }
 
+  async applyCallEvent(callSessionId: string, event: {
+    eventType: string; occurredAt: string; idempotencyKey: string; payload?: Record<string, unknown>;
+  }, state?: string): Promise<void> {
+    const conn = await this.pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [calls] = await conn.execute<mysql.RowDataPacket[]>('SELECT ended_at FROM call_session WHERE id=? FOR UPDATE', [callSessionId]);
+      if (!calls[0]) throw new NotFoundError('call not found');
+      const [receipts] = await conn.execute<mysql.RowDataPacket[]>('SELECT eventKey FROM aida_tbl_EventReceipt WHERE uidCall=? AND eventKey=?', [callSessionId, event.idempotencyKey]);
+      if (receipts.length) { await conn.commit(); return; }
+      await conn.execute('INSERT INTO aida_tbl_EventReceipt (uidCall,eventKey) VALUES (?,?)', [callSessionId, event.idempotencyKey]);
+      const [seqs] = await conn.execute<mysql.RowDataPacket[]>('SELECT COALESCE(MAX(sequence_number),0)+1 AS seq FROM call_event WHERE call_session_id=?', [callSessionId]);
+      await conn.execute('INSERT INTO call_event (id,call_session_id,sequence_number,event_type,payload) VALUES (?,?,?,?,?)',
+        [randomUUID(),callSessionId,Number(seqs[0]?.seq),event.eventType,event.payload ? JSON.stringify(event.payload) : null]);
+      // Late/replayed bridge or room events cannot resurrect an ended phone call.
+      if (state && !calls[0].ended_at) {
+        await conn.execute('UPDATE call_session SET state=?,ended_at=?,version=version+1 WHERE id=?',
+          [state,state === 'ended' ? new Date(event.occurredAt) : null,callSessionId]);
+      }
+      await conn.commit();
+    } catch (error) { await conn.rollback(); throw error; }
+    finally { conn.release(); }
+  }
+
   async claimControlCommand(
     command: ControlCommandRecord,
+    expectedVersion?: number,
   ): Promise<{ claimed: boolean; existing?: ControlCommandRecord }> {
+    const conn = await this.pool.getConnection();
     try {
-      await this.pool.execute(
-        `INSERT INTO control_command (id, call_session_id, idempotency_key, command_type, payload, status)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [
-          randomUUID(),
-          command.callSessionId,
-          command.idempotencyKey,
-          command.commandType,
-          command.payload ? JSON.stringify(command.payload) : null,
-          command.status,
-        ],
+      await conn.beginTransaction();
+      const [sessions] = await conn.execute<mysql.RowDataPacket[]>('SELECT version,ended_at FROM call_session WHERE id=? FOR UPDATE', [command.callSessionId]);
+      const session = sessions[0];
+      if (!session) throw new NotFoundError('call not found');
+      const [rows] = await conn.execute<mysql.RowDataPacket[]>('SELECT * FROM control_command WHERE call_session_id=? AND idempotency_key=?', [command.callSessionId, command.idempotencyKey]);
+      const previous = rows[0];
+      if (previous) {
+        if (previous.command_type !== command.commandType || !isDeepStrictEqual(asRecord(previous.payload), command.payload)) throw new ConflictError('idempotencyKey was used for a different command');
+        await conn.commit();
+        return { claimed: false, existing: { ...command, status: String(previous.status), result: asRecord(previous.result) } };
+      }
+      if (session.ended_at) throw new ConflictError('call has ended');
+      if (expectedVersion !== undefined && (!Number.isSafeInteger(expectedVersion) || expectedVersion !== Number(session.version))) throw new ConflictError('call version changed; refresh call state');
+      await conn.execute(
+        'INSERT INTO control_command (id,call_session_id,idempotency_key,command_type,payload,status) VALUES (?,?,?,?,?,?)',
+        [randomUUID(),command.callSessionId,command.idempotencyKey,command.commandType,command.payload ? JSON.stringify(command.payload) : null,command.status],
       );
+      await conn.execute('UPDATE call_session SET version=version+1 WHERE id=?', [command.callSessionId]);
+      const [seqs] = await conn.execute<mysql.RowDataPacket[]>('SELECT COALESCE(MAX(sequence_number),0)+1 AS seq FROM call_event WHERE call_session_id=?', [command.callSessionId]);
+      await conn.execute('INSERT INTO call_event (id,call_session_id,sequence_number,event_type,payload) VALUES (?,?,?,?,?)', [randomUUID(),command.callSessionId,Number(seqs[0]?.seq), 'command.accepted', JSON.stringify({commandType: command.commandType})]);
+      await conn.commit();
       return { claimed: true };
-    } catch (err) {
-      if (!isDuplicate(err)) throw err;
-      const [rows] = await this.pool.execute(
-        'SELECT call_session_id, idempotency_key, command_type, payload, status, result FROM control_command WHERE call_session_id = ? AND idempotency_key = ?',
-        [command.callSessionId, command.idempotencyKey],
-      );
-      const row = (rows as Array<{
-        call_session_id: string;
-        idempotency_key: string;
-        command_type: string;
-        payload: unknown;
-        status: string;
-        result: unknown;
-      }>)[0];
-      if (!row) throw err;
-      return {
-        claimed: false,
-        existing: {
-          callSessionId: row.call_session_id,
-          idempotencyKey: row.idempotency_key,
-          commandType: row.command_type,
-          payload: asRecord(row.payload),
-          status: row.status,
-          result: asRecord(row.result),
-        },
-      };
-    }
+    } catch (error) { await conn.rollback(); throw error; }
+    finally { conn.release(); }
   }
 
   async completeControlCommand(
@@ -304,6 +321,89 @@ export class MysqlRuntimeStore implements RuntimeStore {
       'UPDATE control_command SET status = ?, result = ?, completed_at = CURRENT_TIMESTAMP(3) WHERE call_session_id = ? AND idempotency_key = ?',
       [status, result ? JSON.stringify(result) : null, callSessionId, idempotencyKey],
     );
+  }
+
+  async applyLiveKitWebhook(delivery: LiveKitWebhookUpdate): Promise<LiveKitWebhookResult> {
+    const conn = await this.pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      // This same call-row lock serializes lifecycle and command/event writers.
+      const [calls] = await conn.execute<mysql.RowDataPacket[]>(
+        'SELECT room_name, ended_at FROM call_session WHERE id = ? FOR UPDATE',
+        [delivery.callSessionId],
+      );
+      if (!calls[0] || calls[0].room_name !== delivery.roomName) {
+        await conn.rollback();
+        return 'unknown-room';
+      }
+      try {
+        await conn.execute(
+          'INSERT INTO webhook_delivery (delivery_id, source, event_type, call_session_id) VALUES (?, ?, ?, ?)',
+          [delivery.deliveryId, 'livekit', delivery.eventType, delivery.callSessionId],
+        );
+      } catch (error) {
+        if (!isDuplicate(error)) throw error;
+        await conn.rollback();
+        return 'duplicate';
+      }
+
+      const participant = delivery.participant;
+      if (delivery.eventType === 'participant_joined' && participant) {
+        await conn.execute(
+          `INSERT INTO livekit_participant (call_session_id, participant_sid, identity, kind)
+           VALUES (?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE identity = VALUES(identity), kind = VALUES(kind), left_at = NULL`,
+          [delivery.callSessionId, participant.sid, participant.identity ?? null, participant.kind],
+        );
+        if (participant.isAgent && !calls[0].ended_at) {
+          await conn.execute(
+            `UPDATE call_session SET agent_participant_sid = ?, version = version + 1
+             WHERE id = ? AND (agent_participant_sid IS NULL OR agent_participant_sid <> ?)`,
+            [participant.sid, delivery.callSessionId, participant.sid],
+          );
+        }
+      } else if (delivery.eventType === 'participant_left' && participant) {
+        await conn.execute(
+          `UPDATE livekit_participant SET left_at = COALESCE(left_at, CURRENT_TIMESTAMP(3))
+           WHERE call_session_id = ? AND participant_sid = ?`,
+          [delivery.callSessionId, participant.sid],
+        );
+        // A late departure from an older agent cannot clear its replacement.
+        await conn.execute(
+          `UPDATE call_session SET agent_participant_sid = NULL, version = version + 1
+           WHERE id = ? AND agent_participant_sid = ?`,
+          [delivery.callSessionId, participant.sid],
+        );
+      } else if (delivery.eventType === 'room_finished') {
+        await conn.execute(
+          'UPDATE livekit_participant SET left_at = COALESCE(left_at, CURRENT_TIMESTAMP(3)) WHERE call_session_id = ?',
+          [delivery.callSessionId],
+        );
+        await conn.execute(
+          `UPDATE call_session SET agent_participant_sid = NULL, version = version + 1
+           WHERE id = ? AND agent_participant_sid IS NOT NULL`,
+          [delivery.callSessionId],
+        );
+        // Room closure only changes LiveKit metadata. ARI owns phone termination.
+      }
+
+      const [sequences] = await conn.execute<mysql.RowDataPacket[]>(
+        'SELECT COALESCE(MAX(sequence_number), 0) + 1 AS seq FROM call_event WHERE call_session_id = ?',
+        [delivery.callSessionId],
+      );
+      await conn.execute(
+        'INSERT INTO call_event (id, call_session_id, sequence_number, event_type, payload) VALUES (?, ?, ?, ?, ?)',
+        [randomUUID(), delivery.callSessionId, Number(sequences[0]?.seq), `livekit.${delivery.eventType}`,
+          JSON.stringify({ participantSid: participant?.sid, identity: participant?.identity })],
+      );
+      await conn.commit();
+      return 'applied';
+    } catch (error) {
+      await conn.rollback().catch(() => {});
+      throw error;
+    } finally {
+      conn.release();
+    }
   }
 
   async upsertParticipant(

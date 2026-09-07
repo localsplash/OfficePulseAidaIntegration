@@ -1,5 +1,5 @@
 import type { NocoReadApi, NocoRecord } from './api.js';
-import { NotFoundError } from '../errors.js';
+import { NotFoundError, UpstreamError } from '../errors.js';
 
 /**
  * Typed read-only projection of the AidaAdmin configuration base
@@ -180,12 +180,13 @@ export class NocoConfigRepository {
    * fallback path rather than treating configuration as an outage.
    */
   async resolveInboundRoute(didE164: string): Promise<ResolvedRoute | undefined> {
-    let records: NocoRecord[] = [];
+    const matched = new Map<string, NocoRecord>();
     for (const variant of didVariants(didE164)) {
-      records = await this.api.listRecords('did_route', [{ field: 'did_e164', op: 'eq', value: variant }], 2);
-      if (records.length > 0) break;
+      const records = await this.api.listRecords('did_route', [{ field: 'did_e164', op: 'eq', value: variant }], 2);
+      for (const row of records) matched.set(str(row, 'id'), row);
     }
-    const first = records[0];
+    if (matched.size > 1) throw new UpstreamError('ambiguous DID configuration', 'nocodb');
+    const first = [...matched.values()][0];
     if (!first) return undefined;
 
     const didRoute = toDidRoute(first);
@@ -205,7 +206,8 @@ export class NocoConfigRepository {
 
   async getTenant(tenantId: string): Promise<TenantConfig | undefined> {
     if (tenantId === '') return undefined;
-    const records = await this.api.listRecords('tenant', [{ field: 'id', op: 'eq', value: tenantId }], 1);
+    const records = await this.api.listRecords('tenant', [{ field: 'id', op: 'eq', value: tenantId }], 2);
+    if (records.length > 1) throw new UpstreamError('duplicate tenant voice profile', 'nocodb');
     return records[0] ? toTenant(records[0]) : undefined;
   }
 
@@ -253,6 +255,19 @@ export class NocoConfigRepository {
       musicOnHoldClass: optStr(record, 'music_on_hold_class'),
       enabled: bool(record, 'enabled'),
     };
+  }
+
+  async ringGroupsForExtension(extensionId: string, tenantId: string): Promise<string[]> {
+    const rows = await this.api.listRecords('ring_group_member', [{ field: 'extension_id', op: 'eq', value: extensionId }], 200);
+    const ids: string[] = [];
+    for (const row of rows) {
+      // Admin removes members by disabling their row. Only a current membership
+      // in this business may grant call/transcript access to the destination.
+      if (!bool(row, 'enabled') || str(row, 'tenant_id') !== tenantId) continue;
+      const group = await this.getRingGroup(str(row, 'ring_group_id'));
+      if (group?.enabled && group.tenantId === tenantId) ids.push(group.id);
+    }
+    return [...new Set(ids)];
   }
 
   /** Device lookup by normalized MAC. The MAC is lookup data, never a credential. */

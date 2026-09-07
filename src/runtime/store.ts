@@ -82,6 +82,16 @@ export interface ProvisioningOperationRecord {
   status: string;
 }
 
+/** Validated LiveKit delivery; receipts and all projections commit together. */
+export interface LiveKitWebhookUpdate {
+  deliveryId: string;
+  eventType: string;
+  callSessionId: string;
+  roomName: string;
+  participant?: { sid: string; identity?: string; kind: string; isAgent: boolean };
+}
+export type LiveKitWebhookResult = 'applied' | 'duplicate' | 'unknown-room';
+
 export interface RuntimeStore {
   /**
    * Insert a call session, or return the existing one when this Asterisk
@@ -102,6 +112,10 @@ export interface RuntimeStore {
     event: { eventType: string; payload?: Record<string, unknown> },
   ): Promise<CallEventRecord>;
   listCallEvents(callSessionId: string): Promise<CallEventRecord[]>;
+  /** Durable lifecycle projection and receipt in one transaction (production store). */
+  applyCallEvent?(callSessionId: string, event: {
+    eventType: string; occurredAt: string; idempotencyKey: string; payload?: Record<string, unknown>;
+  }, state?: string): Promise<void>;
 
   /**
    * Claim a command by (session, idempotency key). `claimed: false` means
@@ -109,6 +123,7 @@ export interface RuntimeStore {
    */
   claimControlCommand(
     command: ControlCommandRecord,
+    expectedVersion?: number,
   ): Promise<{ claimed: boolean; existing?: ControlCommandRecord }>;
   completeControlCommand(
     callSessionId: string,
@@ -116,6 +131,9 @@ export interface RuntimeStore {
     status: string,
     result?: Record<string, unknown>,
   ): Promise<void>;
+
+  /** Required by the LiveKit handler; optional only for stores unused by that surface. */
+  applyLiveKitWebhook?(delivery: LiveKitWebhookUpdate): Promise<LiveKitWebhookResult>;
 
   /** Records a participant; a repeated SID updates rather than duplicates. */
   upsertParticipant(

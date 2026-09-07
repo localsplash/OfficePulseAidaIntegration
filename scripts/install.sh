@@ -7,7 +7,7 @@
 # Expects: node >= 22 on the host, /etc/aida-integration/env populated
 # (see README configuration table), deploy/sql/schema.sql AND
 # deploy/sql/runtime-schema.sql applied (the latter creates the
-# `aida_officepulse` database this service owns), and
+# `aidacalls_db` database this service owns), and
 # the Asterisk templates under asterisk/ installed on the OfficePulse
 # host. Keeps the previous release for scripts/rollback.sh.
 set -euo pipefail

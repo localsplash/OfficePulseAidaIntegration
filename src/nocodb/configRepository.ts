@@ -261,6 +261,9 @@ export class NocoConfigRepository {
     const rows = await this.api.listRecords('ring_group_member', [{ field: 'extension_id', op: 'eq', value: extensionId }], 200);
     const ids: string[] = [];
     for (const row of rows) {
+      // Admin removes members by disabling their row. Only a current membership
+      // in this business may grant call/transcript access to the destination.
+      if (!bool(row, 'enabled') || str(row, 'tenant_id') !== tenantId) continue;
       const group = await this.getRingGroup(str(row, 'ring_group_id'));
       if (group?.enabled && group.tenantId === tenantId) ids.push(group.id);
     }

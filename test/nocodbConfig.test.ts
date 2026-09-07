@@ -189,3 +189,32 @@ test('an extension is found by its normalized MAC', async () => {
   assert.equal(extension?.deviceId, 'device-1');
   assert.equal(await new NocoConfigRepository(api).findExtensionByMac('DEADBEEF0000'), undefined);
 });
+
+test('removing a ring-group member revokes the destination on the next access check', async () => {
+  const api = new FakeNocoApi();
+  api.seed('ring_group', [{ id: 'group-1', tenant_id: '1', enabled: true }]);
+  const member = { id: 'member-1', tenant_id: '1', extension_id: 'ext-1', ring_group_id: 'group-1', enabled: true };
+  api.seed('ring_group_member', [member]);
+  const repo = new NocoConfigRepository(api);
+  assert.deepEqual(await repo.ringGroupsForExtension('ext-1', '1'), ['group-1']);
+  member.enabled = false;
+  assert.deepEqual(await repo.ringGroupsForExtension('ext-1', '1'), []);
+});
+
+test('disabled, missing-enabled and wrong-business membership rows cannot grant group access', async () => {
+  const api = new FakeNocoApi();
+  api.seed('ring_group', [
+    { id: 'group-1', tenant_id: '1', enabled: true },
+    { id: 'group-foreign', tenant_id: '2', enabled: true },
+  ]);
+  const member = { tenant_id: '1', extension_id: 'ext-1', ring_group_id: 'group-1' };
+  const repo = new NocoConfigRepository(api);
+  for (const row of [
+    { ...member, enabled: false }, { ...member, enabled: 0 }, { ...member, enabled: 'false' },
+    member, { ...member, tenant_id: '2', enabled: true },
+    { ...member, enabled: true, ring_group_id: 'group-foreign' },
+  ]) {
+    api.seed('ring_group_member', [row]);
+    assert.deepEqual(await repo.ringGroupsForExtension('ext-1', '1'), []);
+  }
+});

@@ -1,4 +1,4 @@
--- Apply to the integration-owned runtime DB (target aida_db), never the PBX DB.
+-- Apply to the integration-owned runtime DB (configured aidacalls_db), never the PBX DB.
 CREATE TABLE IF NOT EXISTS aida_tbl_DeviceEnrollment (
   tokenHash CHAR(64) PRIMARY KEY,
   iTenantId BIGINT NOT NULL,

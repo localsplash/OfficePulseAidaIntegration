@@ -6,15 +6,13 @@ import type {
   CallEventRecord,
   CallSessionRecord,
   ControlCommandRecord,
-  DidFallbackRecord,
   Disposition,
   NewCallSession,
-  ProvisioningOperationRecord,
   RuntimeStore,
   LiveKitWebhookUpdate,
   LiveKitWebhookResult,
 } from './store.js';
-import type { DestinationType } from '../nocodb/configRepository.js';
+import type { DestinationType } from './store.js';
 
 export interface RuntimeMysqlConfig {
   host: string;
@@ -441,83 +439,6 @@ export class MysqlRuntimeStore implements RuntimeStore {
       if (isDuplicate(err)) return false;
       throw err;
     }
-  }
-
-  async upsertDidFallback(record: DidFallbackRecord): Promise<void> {
-    await this.pool.execute(
-      `INSERT INTO did_fallback (did_route_id, tenant_id, did_e164, destination_type, destination_id, enabled)
-       VALUES (?, ?, ?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE tenant_id = VALUES(tenant_id), did_e164 = VALUES(did_e164),
-         destination_type = VALUES(destination_type), destination_id = VALUES(destination_id),
-         enabled = VALUES(enabled)`,
-      [
-        record.didRouteId,
-        record.tenantId,
-        record.didE164,
-        record.destinationType,
-        record.destinationId,
-        record.enabled ? 1 : 0,
-      ],
-    );
-  }
-
-  async getDidFallbackByDid(didE164: string): Promise<DidFallbackRecord | undefined> {
-    const [rows] = await this.pool.execute('SELECT * FROM did_fallback WHERE did_e164 = ?', [didE164]);
-    return this.toFallback(rows);
-  }
-
-  async getDidFallbackByRouteId(didRouteId: string): Promise<DidFallbackRecord | undefined> {
-    const [rows] = await this.pool.execute('SELECT * FROM did_fallback WHERE did_route_id = ?', [didRouteId]);
-    return this.toFallback(rows);
-  }
-
-  private toFallback(rows: unknown): DidFallbackRecord | undefined {
-    const row = (rows as Array<{
-      did_route_id: string;
-      tenant_id: string;
-      did_e164: string;
-      destination_type: string;
-      destination_id: string;
-      enabled: number;
-    }>)[0];
-    if (!row) return undefined;
-    return {
-      didRouteId: row.did_route_id,
-      tenantId: row.tenant_id,
-      didE164: row.did_e164,
-      destinationType: row.destination_type as DestinationType,
-      destinationId: row.destination_id,
-      enabled: row.enabled === 1,
-    };
-  }
-
-  async recordProvisioningOperation(record: ProvisioningOperationRecord): Promise<void> {
-    await this.pool.execute(
-      'INSERT INTO provisioning_operation (request_id, kind, external_id, action, status) VALUES (?, ?, ?, ?, ?)',
-      [record.requestId, record.kind, record.externalId, record.action, record.status],
-    );
-  }
-
-  async getProvisioningOperation(requestId: string): Promise<ProvisioningOperationRecord | undefined> {
-    const [rows] = await this.pool.execute(
-      'SELECT request_id, kind, external_id, action, status FROM provisioning_operation WHERE request_id = ?',
-      [requestId],
-    );
-    const row = (rows as Array<{
-      request_id: string;
-      kind: string;
-      external_id: string;
-      action: string;
-      status: string;
-    }>)[0];
-    if (!row) return undefined;
-    return {
-      requestId: row.request_id,
-      kind: row.kind,
-      externalId: row.external_id,
-      action: row.action,
-      status: row.status,
-    };
   }
 
   async setDependencyStatus(name: string, ready: boolean, detail?: string): Promise<void> {

@@ -3,9 +3,7 @@ import type {
   CallEventRecord,
   CallSessionRecord,
   ControlCommandRecord,
-  DidFallbackRecord,
   NewCallSession,
-  ProvisioningOperationRecord,
   RuntimeStore,
 } from '../../src/runtime/store.js';
 
@@ -20,8 +18,6 @@ export class FakeRuntimeStore implements RuntimeStore {
   commands = new Map<string, ControlCommandRecord>();
   participants = new Map<string, Map<string, { identity?: string; kind: string; left: boolean }>>();
   deliveries = new Set<string>();
-  fallbacks = new Map<string, DidFallbackRecord>();
-  operations = new Map<string, ProvisioningOperationRecord>();
   dependencies = new Map<string, { ready: boolean; detail?: string }>();
   failOn: string | null = null;
   pingResult = true;
@@ -130,31 +126,6 @@ export class FakeRuntimeStore implements RuntimeStore {
     if (this.deliveries.has(key)) return false;
     this.deliveries.add(key);
     return true;
-  }
-
-  async upsertDidFallback(record: DidFallbackRecord): Promise<void> {
-    this.guard('upsertDidFallback');
-    this.fallbacks.set(record.didRouteId, { ...record });
-  }
-
-  async getDidFallbackByDid(didE164: string): Promise<DidFallbackRecord | undefined> {
-    this.guard('getDidFallbackByDid');
-    for (const record of this.fallbacks.values()) {
-      if (record.didE164 === didE164) return record;
-    }
-    return undefined;
-  }
-
-  async getDidFallbackByRouteId(didRouteId: string): Promise<DidFallbackRecord | undefined> {
-    return this.fallbacks.get(didRouteId);
-  }
-
-  async recordProvisioningOperation(record: ProvisioningOperationRecord): Promise<void> {
-    this.operations.set(record.requestId, { ...record });
-  }
-
-  async getProvisioningOperation(requestId: string): Promise<ProvisioningOperationRecord | undefined> {
-    return this.operations.get(requestId);
   }
 
   async setDependencyStatus(name: string, ready: boolean, detail?: string): Promise<void> {

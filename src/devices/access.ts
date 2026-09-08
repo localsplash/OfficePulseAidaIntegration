@@ -1,5 +1,4 @@
 import { createHash, randomBytes } from 'node:crypto';
-import type { NocoConfigRepository } from '../nocodb/configRepository.js';
 import type { RuntimeStore, CallSessionRecord } from '../runtime/store.js';
 import type { Route, ApiRequest } from '../http/httpServer.js';
 import { signAccessToken } from '../livekit/token.js';
@@ -31,24 +30,22 @@ function object(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function tenantId(value: unknown): number {
-  if (typeof value !== 'number' && (typeof value !== 'string' || !/^[1-9][0-9]*$/.test(value))) failure(400, 'valid iTenantId required');
-  const n = Number(value);
-  if (!Number.isSafeInteger(n) || n <= 0) failure(400, 'valid iTenantId required');
-  return n;
+export interface DeviceDirectory {
+  getExtension(id: string): Promise<{ tenantId: string; enabled: boolean } | undefined>;
+  queueDestinationsForExtension(id: string, tenantId: string): Promise<string[]>;
 }
 
 export interface DeviceAccessOptions {
   store: DeviceStore;
   runtime: RuntimeStore;
-  config: Pick<NocoConfigRepository, 'getExtension' | 'ringGroupsForExtension'>;
+  config: DeviceDirectory;
   tenantEnabled: (iTenantId: number) => Promise<boolean>;
   livekit: { url: string; apiKey: string; apiSecret: string };
   commandRoute: Route;
   voiceEnabled?: boolean;
 }
 
-/** Public device routes authenticate opaque credentials; private provisioning remains CIDR gated. */
+/** Reusable device protocol; canonical startup requires a native PBX authorization adapter before registration. */
 export function deviceRoutes(options: DeviceAccessOptions): Route[] {
   const authorized = async (req: ApiRequest): Promise<{ device: DeviceGrant; destinations: string[] }> => {
     const authorization = req.headers.authorization ?? '';
@@ -58,7 +55,7 @@ export function deviceRoutes(options: DeviceAccessOptions): Route[] {
     const extension = await options.config.getExtension(device.extensionId);
     if (!extension?.enabled || Number(extension.tenantId) !== device.iTenantId) failure(403, 'device access disabled');
     if (!(await options.tenantEnabled(device.iTenantId))) failure(403, 'business disabled');
-    const groups = await options.config.ringGroupsForExtension(device.extensionId, String(device.iTenantId));
+    const groups = await options.config.queueDestinationsForExtension(device.extensionId, String(device.iTenantId));
     return { device, destinations: [device.extensionId, ...groups] };
   };
   const scopedCall = async (req: ApiRequest) => {
@@ -75,20 +72,6 @@ export function deviceRoutes(options: DeviceAccessOptions): Route[] {
     extensionId: call.destinationType === 'EXTENSION' ? call.destinationId : undefined,
   });
   return [
-    {
-      method: 'POST', pattern: '/v1/provisioning/device-enrollments',
-      handler: async (req) => {
-        const body = object(req.body);
-        const id = tenantId(body.iTenantId);
-        const extensionId = typeof body.extensionId === 'string' ? body.extensionId : '';
-        const extension = await options.config.getExtension(extensionId);
-        if (!extension?.enabled || Number(extension.tenantId) !== id) failure(404, 'extension not found');
-        if (!(await options.tenantEnabled(id))) failure(403, 'business disabled');
-        const enrollmentToken = randomBytes(32).toString('base64url');
-        await options.store.issueEnrollment(credentialHash(enrollmentToken), id, extensionId);
-        return { status: 201, body: { enrollmentToken, expiresIn: 600 } };
-      },
-    },
     {
       method: 'POST', pattern: '/v1/devices/enroll', trusted: false,
       handler: async (req) => {
@@ -112,13 +95,6 @@ export function deviceRoutes(options: DeviceAccessOptions): Route[] {
       handler: async (req) => {
         const { device } = await authorized(req);
         await options.store.revokeDevice(device.id);
-        return { status: 200, body: { ok: true } };
-      },
-    },
-    {
-      method: 'DELETE', pattern: '/v1/provisioning/devices/:deviceId',
-      handler: async (req) => {
-        await options.store.revokeDevice(req.params.deviceId ?? '');
         return { status: 200, body: { ok: true } };
       },
     },

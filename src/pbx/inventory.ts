@@ -1,6 +1,6 @@
 import mysql from 'mysql2/promise';
 import { ConfigError, DependencyUnavailableError, ValidationError } from '../errors.js';
-import type { MysqlStoreConfig } from '../provisioning/mysqlStore.js';
+import type { RuntimeMysqlConfig } from '../runtime/mysqlRuntimeStore.js';
 import type { Route } from '../http/httpServer.js';
 
 export interface PbxTenantScope { contexts: string[]; queueNames: string[] }
@@ -78,7 +78,7 @@ export class PbxInventoryReader implements InventoryReader {
   }
 }
 
-export function mysqlPbxInventory(config: MysqlStoreConfig): { reader: InventoryReader; close: () => Promise<void> } {
+export function mysqlPbxInventory(config: RuntimeMysqlConfig): { reader: InventoryReader; close: () => Promise<void> } {
   const pool = mysql.createPool({ ...config, connectionLimit: 2, connectTimeout: 4000 });
   return { reader: new PbxInventoryReader(async (sql, values) => {
     const [rows] = await pool.execute({ sql, timeout: 4000 }, values);
@@ -102,13 +102,4 @@ export function pbxInventoryRoutes(reader: InventoryReader, scopes: PbxTenantSco
       }
     },
   }));
-}
-
-/** Historical desired-state writers are available only for an explicit rollback. */
-export function legacyPbxProvisioning(routes: Route[], enabled: boolean): Route[] {
-  return routes.map((route) => !enabled && route.pattern.startsWith('/v1/provisioning/') ? {
-    ...route, handler: () => ({ status: 409, body: {
-      error: 'pbx_source_of_truth', message: 'Manage extensions, queues and PBX routing in OfficePulse; legacy provisioning is disabled',
-    } }),
-  } : route);
 }

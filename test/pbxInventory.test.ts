@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { HttpApi, publicApiOptions, type Route } from '../src/http/httpServer.js';
 import { Readiness } from '../src/readiness.js';
 import { loadConfig } from '../src/config.js';
-import { legacyPbxProvisioning, parsePbxTenantScopes, PbxInventoryReader, pbxInventoryRoutes } from '../src/pbx/inventory.js';
+import { parsePbxTenantScopes, PbxInventoryReader, pbxInventoryRoutes } from '../src/pbx/inventory.js';
 import { captureLogger } from './helpers/capture.js';
 
 const scope = { contexts: ['business-one'], queueNames: ['support-one'] };
@@ -91,24 +91,7 @@ test('inventory is absent from public ingress and disabled inventory cannot read
 test('read-only inventory can run before LiveKit voice connectors with a dedicated SQL account', () => {
   const config = loadConfig({ NODE_ENV: 'test', VOICE_ENABLED: 'false', PBX_INVENTORY_ENABLED: 'true',
     MYSQL_HOST: 'pbx', MYSQL_DATABASE: 'asterisk', PBX_INVENTORY_MYSQL_USER: 'inventory_ro', PBX_INVENTORY_MYSQL_PASSWORD: 'test-only' });
-  assert.equal(config.voiceEnabled, false);
   assert.equal(config.pbxInventoryMysql?.host, 'pbx');
   assert.equal(config.pbxInventoryMysql?.user, 'inventory_ro');
   assert.throws(() => loadConfig({ NODE_ENV: 'test', PBX_INVENTORY_ENABLED: 'true' }), /PBX_INVENTORY_MYSQL_USER/);
-});
-
-test('legacy PBX writes require explicit rollback opt-in and never invoke handlers by default', async () => {
-  assert.equal(loadConfig({ NODE_ENV: 'test' }).legacyPbxProvisioningEnabled, false);
-  assert.equal(loadConfig({ NODE_ENV: 'test', LEGACY_PBX_PROVISIONING_ENABLED: 'true' }).legacyPbxProvisioningEnabled, true);
-  assert.throws(() => loadConfig({ NODE_ENV: 'test', LEGACY_PBX_PROVISIONING_ENABLED: 'yes' }), /must be true or false/);
-  let calls = 0;
-  const routes: Route[] = [{ method: 'POST', pattern: '/v1/provisioning/extensions', handler: () => { calls++; return { status: 201 }; } }];
-  await withApi(legacyPbxProvisioning(routes, false), async (base) => {
-    assert.equal((await fetch(`${base}/v1/provisioning/extensions`, { method: 'POST' })).status, 409);
-  });
-  assert.equal(calls, 0);
-  await withApi(legacyPbxProvisioning(routes, true), async (base) => {
-    assert.equal((await fetch(`${base}/v1/provisioning/extensions`, { method: 'POST' })).status, 201);
-  });
-  assert.equal(calls, 1);
 });

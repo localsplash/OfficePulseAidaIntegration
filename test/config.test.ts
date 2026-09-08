@@ -15,6 +15,7 @@ const PROD_ENV = {
   MYSQL_USER: 'aida_integration',
   MYSQL_PASSWORD: 'pw',
   MYSQL_DATABASE: 'asterisk',
+  RUNTIME_MYSQL_HOST: 'runtime-db',
   RUNTIME_MYSQL_USER: 'aida_runtime',
   RUNTIME_MYSQL_PASSWORD: 'pw',
   NOCODB_BASE_URL: 'https://nocodb.test',
@@ -38,7 +39,6 @@ test('administration-only production requires real platform services but no voic
   assert.equal(config.voiceEnabled, false);
   assert.equal(config.ari.password, '');
   assert.equal(config.livekit.apiSecret, '');
-  assert.equal(config.asteriskMysql.host, '');
   assert.throws(() => loadConfig({ ...env, RUNTIME_MYSQL_HOST: '' }), ConfigError);
   assert.throws(() => loadConfig({ ...env, NOCODB_API_TOKEN: '' }), ConfigError);
   assert.throws(() => loadConfig({ ...env, VOICE_ENABLED: 'true' }), ConfigError);
@@ -82,8 +82,7 @@ test('drain timeout is capped at the 10 second maximum', () => {
 });
 
 test('production requires the dependencies this service now orchestrates itself', () => {
-  // Each is individually load-bearing: without NocoDB there is no route,
-  // without LiveKit no screening, without the runtime database no session.
+  // Voice and scoped settings credentials are validated independently.
   for (const key of [
     'NOCODB_BASE_URL',
     'NOCODB_API_TOKEN',
@@ -107,13 +106,8 @@ test('no AidaControl configuration is read or required any more', () => {
   assert.equal(config.livekit.agentName, 'aida-prime');
 });
 
-test('the operator emergency fallback must be complete or absent', () => {
-  assert.throws(() => loadConfig({ ...PROD_ENV, OPERATOR_FALLBACK_CONTEXT: 'emergency' }), ConfigError);
-  assert.throws(() => loadConfig({ ...PROD_ENV, OPERATOR_FALLBACK_EXTENSION: '000' }), ConfigError);
-  const config = loadConfig({
-    ...PROD_ENV,
-    OPERATOR_FALLBACK_CONTEXT: 'emergency',
-    OPERATOR_FALLBACK_EXTENSION: '000',
-  });
-  assert.equal(config.call.operatorFallbackContext, 'emergency');
+test('retired PBX writer credentials and rollback flag are ignored', () => {
+  const config = loadConfig({ ...PROD_ENV, MYSQL_USER: 'retired', LEGACY_PBX_PROVISIONING_ENABLED: 'true' });
+  assert.equal('asteriskMysql' in config, false);
+  assert.equal('legacyPbxProvisioningEnabled' in config, false);
 });

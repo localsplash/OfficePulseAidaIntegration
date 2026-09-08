@@ -26,6 +26,18 @@ test('MySQL platform migration, enrollment and call-command concurrency', { skip
     const call = (await runtime.createCallSession({ id: randomUUID(), asteriskLinkedId: randomUUID(),
       officePulseInstanceId: 'integration-test', tenantId: '1', didE164: '+15555550123', config: {},
       destinationType: 'EXTENSION', destinationId: extensionId, disposition: 'SCREEN', state: 'screening' })).session;
+    await t.test('cleanup removes only projection bookkeeping and preserves device/call runtime', async () => {
+      const retired = ['provisioning_operation', 'did_fallback'];
+      for (const table of retired) await connection.query(`CREATE TABLE ${table} (legacy_id INT)`);
+      await connection.query("DELETE FROM aida_tbl_SchemaMigration WHERE name='004_remove_retired_pbx.sql'");
+      await connection.query("INSERT INTO dependency_status (name,ready) VALUES ('provisioning-adapter',1)");
+      await migrateRuntime(config);
+      assert.equal((await runtime.getCallSession(call.id))?.asteriskLinkedId, call.asteriskLinkedId);
+      for (const table of retired) await assert.rejects(connection.query(`SELECT * FROM ${table}`), /doesn't exist/);
+      const [rows] = await connection.query<mysql.RowDataPacket[]>("SELECT name FROM dependency_status WHERE name='provisioning-adapter'");
+      assert.equal(rows.length, 0);
+      for (const table of ['aida_tbl_DeviceEnrollment', 'aida_tbl_DeviceSession', 'aida_tbl_EventReceipt']) await connection.query(`SELECT * FROM ${table} LIMIT 1`);
+    });
     await t.test('migration rerun preserves existing call data', async () => {
       await migrateRuntime(config);
       assert.equal((await runtime.getCallSession(call.id))?.asteriskLinkedId, call.asteriskLinkedId);

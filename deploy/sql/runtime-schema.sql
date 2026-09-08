@@ -1,3 +1,5 @@
+-- Historical migration: startup removes its database-selection statements.
+-- Existing call/config identifiers below are observed history, not current PBX desired state.
 -- `aida_officepulse`: the runtime database OfficePulseAidaIntegration owns
 -- and is the sole writer of (issue #9). AidaAdmin may READ it through a
 -- read-only account; commands remain HTTP actions, never table writes.

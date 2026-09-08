@@ -38,7 +38,7 @@ PBX_INVENTORY_MYSQL_PASSWORD=<read-only account password>
 PBX_INVENTORY_TENANTS_JSON={"1":{"contexts":["business-one"],"queueNames":["support-one"]}}
 ```
 
-Inventory works with `VOICE_ENABLED=false`; it does not require LiveKit or Agent setup. The separate account needs SELECT on `ps_endpoints`, `queues`, and `queue_members` only; see `deploy/sql/pbx-inventory-grants.sql`. There are no application-owned changes to those vendor tables. Startup never creates queue tables or changes Asterisk mappings.
+Inventory does not require LiveKit or Agent setup. The canonical development service uses `VOICE_ENABLED=false`; inventory is independent of voice connectors. The separate account needs SELECT on `ps_endpoints`, `queues`, and `queue_members` only; see `deploy/sql/pbx-inventory-grants.sql`. There are no application-owned changes to those vendor tables. Startup never creates queue tables or changes Asterisk mappings.
 
 An operator must verify each context contains only endpoint records belonging to that business, and each queue belongs to that business. Do not map a shared default context or a trunk context. Names are bound SQL parameters with exact binary matching. Startup rejects contexts or queue names assigned to multiple tenants, including case variants. Ownership must not be inferred from a number prefix, a queue's exit context, or the presence of one tenant's member. If the installed PBX cannot be separated by these verified references, leave inventory disabled until a suitable adapter is implemented.
 
@@ -74,11 +74,20 @@ is included in this inventory change.
 
 SQL configuration is not running Asterisk state. Runtime registrations, device status, dynamic membership and queue statistics require Asterisk interfaces such as [PJSIPShowEndpoints](https://docs.asterisk.org/Asterisk_22_Documentation/API_Documentation/AMI_Actions/PJSIPShowEndpoints/) and [QueueStatus](https://docs.asterisk.org/Asterisk_22_Documentation/API_Documentation/AMI_Actions/QueueStatus/). [Sorcery caching](https://docs.asterisk.org/Fundamentals/Asterisk-Configuration/Sorcery/Sorcery-Caching/) also means a database write is not proof that a change is active. Future supported OfficePulse commands must validate effective state without creating an AidaAdmin synchronization workflow.
 
-## Historical compatibility and remaining work
+## Canonical development cleanup and remaining work
 
-The former extension/ring-group/DID/handset provisioning routes, including private device enrollment issuance and device revocation, return 409 by default. Existing bearer-authenticated device access/logout and already-issued enrollment consumption remain compatible. `LEGACY_PBX_PROVISIONING_ENABLED=true` re-enables the historical private writers only for a deliberate rollback. It does not turn ring groups into queues. Existing vendor data, integration bookkeeping and runtime data are preserved; no destructive schema or data migration is included.
+The historical extension/ring-group/DID/handset provisioning routes are removed.
+There is no compatibility flag. Their concrete NocoDB desired-state repository
+and runtime projection/fallback accessors are deleted; only `provisioning_operation`
+and `did_fallback` are dropped by the canonical Dev migration. Device tables and
+reusable device/runtime modules remain. See [DEV_CLEANUP.md](DEV_CLEANUP.md).
 
-The existing call runtime still contains legacy `RING_GROUP` destination and NocoDB lookup paths. They are retained for current calls and rollback, and are not a completed queue-native routing implementation. Before business DID routing edits can resume, implement and validate native endpoint/queue references through the OfficePulse-supported command boundary, including tenant ownership, actual dialplan destinations and fail-safe behavior. Do not silently rename old UUID destinations to queue names or bulk-convert rows.
+ARI reconciliation, signed LiveKit callbacks, FastAGI protocol and call commands
+remain. Native queue admission needs verified PBX destinations: canonical bootstrap
+preserves the PBX's fallback, TAKEOVER returns 503 before claiming a command, and
+DRAIN_ACK remains supported with voice enabled. Canonical device routes are unwired
+until native PBX authorization exists. No runtime reader of the deleted NocoDB
+graph remains. Current inventory does not create extensions, queues or phone files.
 
 Issue [#2](https://github.com/localsplash/OfficePulseAidaIntegration/issues/2) tracks that remaining command/routing work and the authenticated operations UI. Issue [#7](https://github.com/localsplash/OfficePulseAidaIntegration/issues/7) tracks installed schema/mapping/read-grant validation, two-tenant API checks, runtime/queue observations and real-call acceptance alongside [AidaAdmin #29](https://github.com/localsplash/AidaAdmin/issues/29). PlatformConfig implementation completion in [#10](https://github.com/localsplash/OfficePulseAidaIntegration/issues/10) is independent of that deployment evidence.
 

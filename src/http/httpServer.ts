@@ -28,7 +28,7 @@ export type RouteHandler = (req: ApiRequest) => Promise<ApiResponse> | ApiRespon
 
 export interface Route {
   method: string;
-  /** Path pattern like /v1/provisioning/extensions/:extensionId */
+  /** Path pattern like /v1/admin/calls/:callSessionId */
   pattern: string;
   handler: RouteHandler;
   /**

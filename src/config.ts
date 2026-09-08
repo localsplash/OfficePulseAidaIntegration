@@ -1,5 +1,7 @@
 import { ConfigError } from './errors.js';
 import { parseCidr } from './net/cidr.js';
+import { parsePbxTenantScopes, type PbxTenantScopes } from './pbx/inventory.js';
+import type { MysqlStoreConfig } from './provisioning/mysqlStore.js';
 
 export type RuntimeEnv = 'production' | 'development' | 'test';
 
@@ -7,6 +9,9 @@ export interface AppConfig {
   env: RuntimeEnv;
   /** Explicit administration-only mode; calling requires configured voice connectors. */
   voiceEnabled: boolean;
+  pbxInventoryScopes: PbxTenantScopes;
+  pbxInventoryMysql?: MysqlStoreConfig;
+  legacyPbxProvisioningEnabled: boolean;
   logLevel: 'debug' | 'info' | 'warn' | 'error';
   officePulseInstanceId: string;
   fastAgi: {
@@ -172,6 +177,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     problems.push('VOICE_ENABLED must be true or false');
   }
   const voiceEnabled = env.VOICE_ENABLED !== 'false';
+  if (env.PBX_INVENTORY_ENABLED !== undefined && !['true', 'false'].includes(env.PBX_INVENTORY_ENABLED)) {
+    problems.push('PBX_INVENTORY_ENABLED must be true or false');
+  }
+  if (env.LEGACY_PBX_PROVISIONING_ENABLED !== undefined && !['true', 'false'].includes(env.LEGACY_PBX_PROVISIONING_ENABLED)) {
+    problems.push('LEGACY_PBX_PROVISIONING_ENABLED must be true or false');
+  }
   /** In production a value must be supplied; elsewhere a dev default stands in. */
   const required = (devFallback: string): string | undefined => (isProd ? undefined : devFallback);
 
@@ -195,6 +206,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const config: AppConfig = {
     env: runtimeEnv,
     voiceEnabled,
+    pbxInventoryScopes: parsePbxTenantScopes(env.PBX_INVENTORY_TENANTS_JSON),
+    pbxInventoryMysql: env.PBX_INVENTORY_ENABLED === 'true' ? {
+      host: str(env, 'MYSQL_HOST', problems, required('127.0.0.1')),
+      port: int(env, 'MYSQL_PORT', 3306, problems, 1, 65535),
+      database: str(env, 'MYSQL_DATABASE', problems, required('asterisk')),
+      user: str(env, 'PBX_INVENTORY_MYSQL_USER', problems),
+      password: str(env, 'PBX_INVENTORY_MYSQL_PASSWORD', problems),
+    } : undefined,
+    legacyPbxProvisioningEnabled: env.LEGACY_PBX_PROVISIONING_ENABLED === 'true',
     logLevel,
     officePulseInstanceId: str(env, 'OFFICEPULSE_INSTANCE_ID', problems, required('officepulse-dev')),
     fastAgi: {

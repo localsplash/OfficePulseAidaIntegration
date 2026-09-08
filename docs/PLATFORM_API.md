@@ -1,6 +1,6 @@
 # Platform runtime contract v1
 
-OfficePulse owns the voice runtime and supported PBX provisioning. Identity owns people, businesses, memberships and staff sessions. AidaControl is deferred. Deploy with Identity's platform contract v2 and AidaAdmin's PlatformConfig/MySQL branch; this is a coordinated development release.
+OfficePulse owns the voice runtime and PBX integration API. Asterisk is the source of truth for PBX configuration; AidaAdmin reads endpoint and queue inventory through OfficePulse. Identity owns people, businesses, memberships and staff sessions. AidaControl is deprecated. The [PBX source-of-truth contract](PBX_SOURCE_OF_TRUTH.md) supersedes the historical desired-state and ring-group provisioning requirements below. Deploy with Identity's platform contract v2 and AidaAdmin's PlatformConfig/MySQL branch; this is a coordinated development release.
 
 ## Stores and cutover
 
@@ -16,13 +16,18 @@ Settings resolve nonblank environment override → `officepulse` → `aida` → 
 
 | Listener | Exposure | Routes |
 | --- | --- | --- |
-| `HTTP_PORT=8085` | Docker/private service network only | Admin `/v1/admin/calls/:id`, events, commands and `/v1/provisioning/*`; CIDR admission |
+| `HTTP_PORT=8085` | Docker/private service network only | Admin `/v1/admin/pbx/extensions`, `/v1/admin/pbx/queues`, `/v1/admin/calls/:id`, events and commands; historical `/v1/provisioning/*` writers require explicit rollback opt-in |
 | `PUBLIC_HTTP_PORT=8086` | HTTPS through NPM | Device `/v1/devices/*`, `/v1/calls*`, signed `/v1/integrations/livekit/webhooks` |
 | `FASTAGI_PORT=4573` | PBX-only private network | AGI bootstrap |
 
 Public and private listeners are distinct: private routes are absent from the public listener even when the proxy is on a trusted subnet. Rate limits and body caps apply to public routes. Forwarded IPs are honored only from configured proxies. Health/readiness are exposed on both listeners. Never forward the private listener, ARI or SQL ports through NPM.
 
 ## Device APIs
+
+Existing compatibility contract; AidaHandset/AidaAgent changes are deferred while
+native PBX references and API access are established. The historical PBX writers
+are disabled unless `LEGACY_PBX_PROVISIONING_ENABLED=true`; device authentication
+and revocation remain available independently for existing enrollments.
 
 A device credential is a scoped hardware capability, not a second staff session authority. Its tenant and extension come from a trusted provisioning grant; a MAC address or client-supplied tenant is never authentication.
 

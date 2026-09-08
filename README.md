@@ -14,9 +14,15 @@ AidaControl service (issue #9). It provides:
 2. **ARI takeover control** — asynchronous multi-channel control: bridge
    the caller with the LiveKit/Aida leg, ring a human on command, connect
    the human instantly on answer, and drain Aida within a bounded window.
-3. **Realtime provisioning API** — private, typed HTTP API through which
-   AidaAdmin's server provisions extensions, ring groups, DIDs, and
-   MAC-based handsets into the Asterisk Realtime MySQL tables.
+3. **PBX inventory API** — AidaAdmin reads native endpoint and queue configuration
+   from Asterisk through the private OfficePulse API. Asterisk is the PBX source
+   of truth; AidaAdmin does not maintain extension/queue copies or sync status.
+   Historical provisioning writers are disabled by default.
+
+The [PBX source-of-truth decision and API contract](docs/PBX_SOURCE_OF_TRUTH.md)
+defines the POC reads, tenant authorization references, queue semantics and
+remaining supported command/routing and operations UI work. It supersedes the
+historical ring-group provisioning architecture below.
 
 ## Data ownership
 
@@ -25,8 +31,8 @@ writer:
 
 | Data set | Writer | This service |
 |---|---|---|
-| NocoDB `PlatformConfig` voice tables | AidaAdmin | **reads only** |
-| Asterisk Realtime MySQL | this service | **writes** |
+| NocoDB `PlatformConfig` business/AI settings and PBX references | AidaAdmin | **reads only** |
+| Asterisk endpoint, queue and dialplan configuration | OfficePulse PBX operations | **reads** through an explicit tenant scope; legacy writes require rollback opt-in |
 | `aidacalls_db` runtime MySQL | this service | **writes** |
 | `aidacalls_db` (AidaAdmin's view) | — | AidaAdmin reads via a read-only account; commands stay HTTP actions |
 
@@ -41,7 +47,7 @@ caller-human bridge.** The takeover manager only ever removes the
 LiveKit/Aida leg; if the human disappears during the drain window, the
 drain is aborted and the caller stays with Aida.
 
-## Call flow
+## Historical call flow (queue-native cutover pending)
 
 ```
 inbound DID (Realtime rows, written by this service's provisioning API)
@@ -74,7 +80,7 @@ Media never traverses this service.
 
 ## Network
 
-Private HTTP `8085` serves AidaAdmin provisioning and administration. Public
+Private HTTP `8085` serves PBX inventory and AidaAdmin administration. Public
 HTTP `8086` serves device bearer APIs and signed LiveKit webhooks through HTTPS
 at NPM. FastAGI `4573`, ARI and MySQL stay private. See the
 [firewall matrix](deploy/firewall-matrix.md) and [API contract](docs/PLATFORM_API.md).
@@ -94,7 +100,11 @@ A clean checkout runs the entire test suite with fakes for Asterisk
 provisioning server — no OfficePulse, NocoDB, or LiveKit credentials are
 required.
 
-## Configuration (environment)
+## Configuration
+
+`NOCODB_BASE_URL` and `NOCODB_API_TOKEN` bootstrap PlatformConfig. Runtime settings
+resolve nonblank environment overrides, then `officepulse`, `aida` and `*` scopes.
+Restart after changing settings. The inventory can run with voice disabled.
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -109,8 +119,12 @@ required.
 | `HTTP_RATE_LIMIT_PER_MINUTE` / `HTTP_MAX_BODY_BYTES` | 300 / 65536 | API rate/body limits |
 | `ARI_URL` / `ARI_USERNAME` / `ARI_PASSWORD` / `ARI_APP` | — / — / — / aida | ARI connection |
 | `MYSQL_HOST` / `MYSQL_PORT` / `MYSQL_USER` / `MYSQL_PASSWORD` / `MYSQL_DATABASE` | — | Asterisk Realtime DB |
+| `PBX_INVENTORY_ENABLED` | false | enable private PBX configuration reads, independently of LiveKit voice connectors |
+| `PBX_INVENTORY_MYSQL_USER` / `PBX_INVENTORY_MYSQL_PASSWORD` | — | dedicated SELECT-only account on the same PBX host/database |
+| `PBX_INVENTORY_TENANTS_JSON` | no scopes | operator-owned tenant-to-context/queue-name allowlist; see the PBX contract |
+| `LEGACY_PBX_PROVISIONING_ENABLED` | false | explicit rollback opt-in for historical provisioning writes |
 | `RUNTIME_MYSQL_HOST` / `_PORT` / `_USER` / `_PASSWORD` / `_DATABASE` | Asterisk host / 3306 / — / — / aidacalls_db | runtime DB this service owns |
-| `NOCODB_BASE_URL` / `NOCODB_API_TOKEN` / `NOCODB_BASE_NAME` / `NOCODB_TIMEOUT_MS` | — / — / AidaAdmin / 4000 | read-only configuration base |
+| `NOCODB_BASE_URL` / `NOCODB_API_TOKEN` / `NOCODB_BASE_NAME` / `NOCODB_TIMEOUT_MS` | — / — / PlatformConfig / 4000 | read-only configuration base |
 | `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` / `LIVEKIT_SIP_HOST` | — (required in prod) | room control, agent dispatch, webhook verification, SIP destination |
 | `LIVEKIT_AGENT_NAME` / `LIVEKIT_TIMEOUT_MS` | aida-prime / 5000 | predefined agent to dispatch |
 | `PUSHER_APP_ID` / `PUSHER_KEY` / `PUSHER_SECRET` / `PUSHER_CLUSTER` | unset | call-arrival notification (notification only) |
@@ -131,6 +145,7 @@ required.
   deliveries, provisioning operations, dependency status, DID fallback
   projection). No transcript table exists by design.
 - `deploy/sql/grants.sql` — least-privilege MySQL account.
+- `deploy/sql/pbx-inventory-grants.sql` — separate read-only PBX inventory account; manually apply only after verifying the installed realtime mapping.
 - `asterisk/` — dialplan include, ARI/HTTP/extconfig/MOH templates for
   the OfficePulse host.
 - `deploy/systemd/aida-integration.service` + `scripts/install.sh` /

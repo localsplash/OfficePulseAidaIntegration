@@ -8,6 +8,7 @@ import { Logger } from './logging/logger.js';
 import { Readiness } from './readiness.js';
 import { HttpApi, publicApiOptions } from './http/httpServer.js';
 import { voiceAvailability } from './http/voiceAvailability.js';
+import { legacyPbxProvisioning, mysqlPbxInventory, pbxInventoryRoutes } from './pbx/inventory.js';
 import { buildRoutes } from './http/routes.js';
 import { FastAgiServer } from './agi/fastAgiServer.js';
 import { createBootstrapHandler } from './agi/bootstrapHandler.js';
@@ -59,6 +60,7 @@ async function main(): Promise<void> {
   if (config.provisioningServer) readiness.register('provisioning-adapter', 'degraded');
 
   const realtimeStore = new MysqlRealtimeStore(config.asteriskMysql);
+  const pbxInventory = config.pbxInventoryMysql ? mysqlPbxInventory(config.pbxInventoryMysql) : undefined;
   const runtimeStore = new MysqlRuntimeStore(config.runtimeMysql);
 
   // Every readiness transition is recorded in the runtime database so
@@ -202,7 +204,8 @@ async function main(): Promise<void> {
       const commandRoute = privateRoutes.find((r) => r.method === 'POST' && r.pattern.endsWith('/commands'))!;
       return [
         ...deviceRoutes({ store: devices, runtime: runtimeStore, config: configRepository, tenantEnabled, livekit: config.livekit, voiceEnabled: config.voiceEnabled, commandRoute }),
-        ...privateRoutes.map((r) => r.pattern.startsWith('/v1/calls/') ? { ...r, pattern: r.pattern.replace('/v1/calls/', '/v1/admin/calls/') } : r),
+        ...pbxInventoryRoutes(pbxInventory?.reader ?? { extensions: async () => [], queues: async () => [] }, config.pbxInventoryScopes, !!pbxInventory),
+        ...legacyPbxProvisioning(privateRoutes, config.legacyPbxProvisioningEnabled).map((r) => r.pattern.startsWith('/v1/calls/') ? { ...r, pattern: r.pattern.replace('/v1/calls/', '/v1/admin/calls/') } : r),
       ];
     })();
 
@@ -276,6 +279,7 @@ async function main(): Promise<void> {
       await publicHttpApi.close().catch(() => {});
       ari.stop();
       await realtimeStore.close().catch(() => {});
+      await pbxInventory?.close().catch(() => {});
       await runtimeStore.close().catch(() => {});
       await devices.close().catch(() => {});
       logger.info('shutdown complete');

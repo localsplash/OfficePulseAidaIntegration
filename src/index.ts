@@ -18,10 +18,16 @@ import { RuntimeCallEventSink } from './runtime/callEventSink.js';
 import { mysqlPbxInventory, pbxInventoryRoutes } from './pbx/inventory.js';
 import { MysqlRuntimeStore } from './runtime/mysqlRuntimeStore.js';
 import { NocoDbReadClient } from './nocodb/api.js';
+import { operationsConfig } from './operations/config.js';
+import { OperationsServer } from './operations/server.js';
+import { HttpOperationsIdentity } from './operations/identity.js';
+import { AriDiagnostics } from './operations/live.js';
 
 /** PBX configuration belongs to Asterisk; voice primitives never read a copied NocoDB routing graph. */
 async function main(): Promise<void> {
-  const config = loadConfig(await platformEnvironment());
+  const environment = await platformEnvironment();
+  const config = loadConfig(environment);
+  const opsConfig = operationsConfig(environment);
   await migrateRuntime(config.runtimeMysql);
   const logger = new Logger({ level: config.logLevel });
   const runtime = new MysqlRuntimeStore(config.runtimeMysql);
@@ -58,9 +64,15 @@ async function main(): Promise<void> {
     maxBodyBytes: config.http.maxBodyBytes, rateLimitPerMinute: config.http.rateLimitPerMinute, routes };
   const privateApi = new HttpApi(options);
   // Only health and signature-authenticated callbacks are public; no device admission is wired.
-  const publicApi = new HttpApi(publicApiOptions(options));
+  const publicApi = new HttpApi({ ...publicApiOptions(options), documentation: true });
   await privateApi.listen(config.http.port, config.http.bind);
   await publicApi.listen(config.http.publicPort, config.http.bind);
+  const operations = opsConfig ? new OperationsServer(opsConfig, {
+    identity: new HttpOperationsIdentity(opsConfig.identityUrl, opsConfig.identitySecret),
+    readiness, live: new AriDiagnostics(opsConfig.ari), inventory: inventory?.reader,
+    scopes: config.pbxInventoryScopes, runtime,
+  }) : undefined;
+  if (operations && opsConfig) await operations.listen(opsConfig.port, config.http.bind);
   if (config.voiceEnabled) { ari.start(); await fastAgi.listen(); }
   else for (const dependency of ['ari', 'livekit']) readiness.set(dependency, false, 'Voice connectors disabled');
   const probe = async () => {
@@ -92,7 +104,7 @@ async function main(): Promise<void> {
     closing = true;
     clearInterval(timer);
     ari.stop();
-    void Promise.allSettled([fastAgi.close(), privateApi.close(), publicApi.close(), runtime.close(), inventory?.close()]).then(() => process.exit(0));
+    void Promise.allSettled([fastAgi.close(), privateApi.close(), publicApi.close(), operations?.close(), runtime.close(), inventory?.close()]).then(() => process.exit(0));
     setTimeout(() => process.exit(1), 10000).unref();
   };
   process.on('SIGTERM', shutdown);

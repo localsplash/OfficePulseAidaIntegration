@@ -5,6 +5,7 @@ import type { Readiness } from '../readiness.js';
 import { RateLimiter } from './rateLimit.js';
 import { ipInCidrs, resolveClientIp } from '../net/cidr.js';
 import { ConfigError, ValidationError } from '../errors.js';
+import { serveDocumentation } from './documentation.js';
 
 export interface ApiRequest {
   method: string;
@@ -43,6 +44,7 @@ export interface Route {
 }
 
 export interface HttpApiOptions {
+  documentation?: boolean;
   logger: Logger;
   readiness: Readiness;
   trustedServerCidrs: readonly string[];
@@ -164,6 +166,7 @@ export class HttpApi {
     const log = this.opts.logger.child({ correlationId, method, path });
 
     try {
+      if (this.opts.documentation && method === 'GET' && await serveDocumentation(path, res)) return;
       if (path === '/healthz') {
         this.send(res, 200, { status: 'ok' }, correlationId);
         return;

@@ -1,5 +1,5 @@
 [Unit]
-Description=OfficePulse Aida Integration (FastAGI, ARI takeover, Realtime provisioning)
+Description=OfficePulse integration API, native PBX inventory and operations UI
 After=network-online.target
 Wants=network-online.target
 

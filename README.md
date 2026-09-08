@@ -73,13 +73,29 @@ history remain usable.
 ## Development and deployment
 
 Use Node 22: `npm ci`, `npm run verify`, then `npm run build`. The Dockerfile
-builds a non-root runtime image. The current authorized deployment is
-`dockerappvm01-dev`; it does not change the separate physical OfficePulse PBX.
+builds a non-root runtime image. The canonical integration runs on
+`officepulse-dev`; AidaAdmin and central runtime storage run on `dockerappvm01-dev`.
 Startup runs the original checksum-verified runtime migrations followed by the
 explicit two-table projection cleanup migration described in the manifest. This development data is disposable;
 no old configuration copies, compatibility switch or rollback window is needed.
 The systemd installer and generic Asterisk templates remain available for separately
 reviewed deployments; this change does not execute them or modify the PBX host.
+
+## Operations UI and API documentation
+
+The operations UI is served at `https://officepulse-admin.localsplash.dev/`.
+Sign in with central Identity using a platform Super Admin account. It reads native
+extensions and queues, service readiness, live ARI endpoints/channels, and tenant
+integration call diagnostics. Every data request rechecks the central session.
+It does not provision extensions, synchronize PBX data, or execute maintenance commands.
+
+Swagger is at `https://officepulse-api.localsplash.dev/docs`; the API root redirects
+there. The contract is at `/openapi.json`. Documentation is public, with interactive
+submission disabled; private API routes retain backend network admission.
+
+See [operations deployment](docs/OPERATIONS.md) for settings, listener routing,
+Identity admission and the separate read-only ARI account. Internal ports 8085–8087
+are loopback upstreams; application clients use the public HTTPS names.
 
 `TEST_MYSQL_URL` enables runtime migration/concurrency tests,
 `TEST_WEBHOOK_MYSQL_URL` tests independent event transaction primitives, and

@@ -126,7 +126,7 @@ required.
 ## Deployment
 
 - `deploy/sql/schema.sql` — bookkeeping tables (in the Realtime DB).
-- `deploy/sql/runtime-schema.sql` — the `aidacalls_db` runtime database
+- `deploy/sql/runtime-schema.sql` — historical baseline consumed by the startup migration runner, which targets configured `aidacalls_db`; do not execute it directly
   (call sessions/events, control commands, LiveKit participants, webhook
   deliveries, provisioning operations, dependency status, DID fallback
   projection). No transcript table exists by design.

@@ -21,6 +21,15 @@ at Identity instead. Login uses `/authorize`, exchanges a single-use code at
 The fixed HTTPS callback is `OPS_PUBLIC_URL` + `/ops/auth/callback`. Only central
 Super Admins may enter. No local password or separate user database is created.
 
+The authenticated interactive API console is at `OPS_PUBLIC_URL` + `/ops/docs`.
+Browser requests use the same-origin `/ops/api/v1/admin/*` gateway, which revalidates
+Identity, restricts the request to an enabled tenant, and requires Origin plus CSRF
+proof for every non-read method. The gateway supports GET, POST, PUT, PATCH and
+DELETE, but a new private route is not exposed merely by existing: its `Route`
+must opt in with `operationsAccess` and declare either tenant-query or call-session
+authorization. This prevents future internal maintenance endpoints from silently
+becoming browser-accessible.
+
 Optional live diagnostics use `OPS_ARI_URL=http://127.0.0.1:8088/ari`,
 `OPS_ARI_USERNAME` and `OPS_ARI_PASSWORD`. Create a dedicated ARI user with
 `type=user` and **`read_only=yes`**, using a protected included configuration file.

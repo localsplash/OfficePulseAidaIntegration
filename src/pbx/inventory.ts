@@ -89,6 +89,7 @@ export function mysqlPbxInventory(config: RuntimeMysqlConfig): { reader: Invento
 export function pbxInventoryRoutes(reader: InventoryReader, scopes: PbxTenantScopes, enabled: boolean): Route[] {
   return (['extensions', 'queues'] as const).map((kind) => ({
     method: 'GET', pattern: `/v1/admin/pbx/${kind}`,
+    operationsAccess: { scope: 'tenant-query' as const, query: 'iTenantId' },
     handler: async (req) => {
       const ids = req.query?.getAll('iTenantId') ?? [];
       const id = ids[0] ?? '';

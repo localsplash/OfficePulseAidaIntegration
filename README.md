@@ -87,11 +87,15 @@ The operations UI is served at `https://officepulse-admin.localsplash.dev/`.
 Sign in with central Identity using a platform Super Admin account. It reads native
 extensions and queues, service readiness, live ARI endpoints/channels, and tenant
 integration call diagnostics. Every data request rechecks the central session.
-It does not provision extensions, synchronize PBX data, or execute maintenance commands.
+It does not provision extensions or synchronize PBX data. Its authenticated API
+console at `/ops/docs` can invoke explicitly browser-enabled Admin routes, including
+call commands. Mutations require a same-origin request and CSRF token; each route
+must declare how its tenant scope is authorized before the gateway exposes it.
 
-Swagger is at `https://officepulse-api.localsplash.dev/docs`; the API root redirects
-there. The contract is at `/openapi.json`. Documentation is public, with interactive
-submission disabled; private API routes retain backend network admission.
+Public, non-interactive Swagger remains at `https://officepulse-api.localsplash.dev/docs`.
+The Super Admin console is at `https://officepulse-admin.localsplash.dev/ops/docs`.
+The private API retains its backend network admission and is never called directly
+by the browser.
 
 See [operations deployment](docs/OPERATIONS.md) for settings, listener routing,
 Identity admission and the separate read-only ARI account. Internal ports 8085–8087

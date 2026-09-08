@@ -33,6 +33,7 @@ export function buildRoutes(deps: RouteDeps): Route[] {
     {
       method: 'GET',
       pattern: '/v1/calls/:callSessionId',
+      operationsAccess: { scope: 'call-session', param: 'callSessionId' },
       handler: async (req) => {
         const session = await deps.runtime.getCallSession(req.params.callSessionId ?? '');
         if (!session) throw new NotFoundError(`no call session ${req.params.callSessionId}`);
@@ -42,6 +43,7 @@ export function buildRoutes(deps: RouteDeps): Route[] {
     {
       method: 'GET',
       pattern: '/v1/calls/:callSessionId/events',
+      operationsAccess: { scope: 'call-session', param: 'callSessionId' },
       handler: async (req) => {
         const events = await deps.runtime.listCallEvents(req.params.callSessionId ?? '');
         return { status: 200, body: { events } };
@@ -50,6 +52,7 @@ export function buildRoutes(deps: RouteDeps): Route[] {
     {
       method: 'POST',
       pattern: '/v1/calls/:callSessionId/commands',
+      operationsAccess: { scope: 'call-session', param: 'callSessionId' },
       handler: async (req) => {
         const callSessionId = req.params.callSessionId ?? '';
         const body = asObject(req.body);
@@ -76,7 +79,7 @@ export function buildRoutes(deps: RouteDeps): Route[] {
           callSessionId,
           idempotencyKey,
           commandType,
-          payload: body,
+          payload: { ...body, ...(req.operator ? { _operationsActor: req.operator } : {}) },
           status: 'in-progress',
         }, typeof body.expectedCallVersion === 'number' ? body.expectedCallVersion : undefined);
         if (!claim.claimed) {

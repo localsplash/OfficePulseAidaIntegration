@@ -18,6 +18,8 @@ export interface ApiRequest {
   headers: Record<string, string | undefined>;
   clientIp: string;
   correlationId: string;
+  /** Present only when an authenticated Operations session invokes this handler in-process. */
+  operator?: { userId: number; email: string | null };
 }
 
 export interface ApiResponse {
@@ -41,6 +43,14 @@ export interface Route {
   trusted?: boolean;
   /** Hands the handler the unparsed body, required to verify a signature. */
   rawBody?: boolean;
+  /**
+   * Explicitly exposes this private Admin route through the authenticated
+   * Operations browser gateway. Future routes stay server-only until their
+   * tenant authorization strategy is declared here.
+   */
+  operationsAccess?:
+    | { scope: 'tenant-query'; query: string }
+    | { scope: 'call-session'; param: string };
 }
 
 export interface HttpApiOptions {

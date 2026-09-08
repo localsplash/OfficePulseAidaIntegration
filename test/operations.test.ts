@@ -8,7 +8,7 @@ import { AriDiagnostics } from '../src/operations/live.js';
 const token = 'central-session-token-abcdefghijklmnopqrstuvwxyz';
 const origin = 'https://officepulse-admin.example.test';
 async function fixture(t: any) {
-  let active = true, superAdmin = true, calls = 0, revoked = 0, redeemed = 0, failIdentity = false;
+  let active = true, superAdmin = true, calls = 0, adminCalls = 0, revoked = 0, redeemed = 0, failIdentity = false;
   const readiness = new Readiness();readiness.register('runtime-mysql','critical',true);
   const server = new OperationsServer({port:0,publicUrl:origin,identityUrl:'https://identity.example.test',apiUrl:'https://officepulse-api.example.test'}, {
     identity:{redeem:async(code,uri)=>{assert.equal(code,'code');assert.equal(uri,origin+'/ops/auth/callback');redeemed++;return token;},
@@ -16,13 +16,19 @@ async function fixture(t: any) {
       revoke:async()=>{revoked++;active=false;}}, readiness,live:{snapshot:async()=>({available:false,message:'Not configured'})},
     inventory:{extensions:async(scope)=>{calls++;assert.deepEqual(scope.contexts,['tenant']);return [{id:'100',context:'tenant',callerId:null,transport:null,aors:null}];},queues:async()=>[]},
     scopes:new Map([['2',{contexts:['tenant'],queueNames:['tenant']}],['3',{contexts:['other'],queueNames:['other']}]]),
-    runtime:{getCallSession:async()=>({id:'other-call',tenantId:'3'} as any),listCallEvents:async()=>{throw new Error('Cross-tenant events must not be read');}},
+    runtime:{getCallSession:async(id)=>({id,tenantId:id==='mine'?'2':'3'} as any),listCallEvents:async()=>{throw new Error('Cross-tenant events must not be read');}},
+    adminRoutes:[
+      {method:'GET',pattern:'/v1/admin/test',operationsAccess:{scope:'tenant-query',query:'iTenantId'},handler:async()=>{adminCalls++;return {status:200,body:{ok:true}};}},
+      {method:'POST',pattern:'/v1/admin/calls/:callSessionId/commands',operationsAccess:{scope:'call-session',param:'callSessionId'},handler:async req=>{adminCalls++;return {status:202,body:{received:req.body,operator:req.operator}};}},
+      {method:'DELETE',pattern:'/v1/admin/test',operationsAccess:{scope:'tenant-query',query:'iTenantId'},handler:async()=>{adminCalls++;return {status:200,body:{deleted:true}};}},
+      {method:'GET',pattern:'/v1/admin/internal',handler:async()=>{throw new Error('must not run');}},
+    ],
   });
   await server.listen(0,'127.0.0.1');t.after(()=>server.close());
   const base='http://127.0.0.1:'+server.address().port;
-  const request=(path:string,headers:Record<string,string>={},method='GET')=>fetch(base+path,{redirect:'manual',method,headers});
+  const request=(path:string,headers:Record<string,string>={},method='GET',body?:string)=>fetch(base+path,{redirect:'manual',method,headers,body});
   const auth={cookie:'__Host-officepulse.sid='+token};
-  return {request,auth,change:(v: {active?:boolean;superAdmin?:boolean;failIdentity?:boolean})=>{active=v.active??active;superAdmin=v.superAdmin??superAdmin;failIdentity=v.failIdentity??failIdentity;},counts:()=>({calls,revoked,redeemed})};
+  return {request,auth,change:(v: {active?:boolean;superAdmin?:boolean;failIdentity?:boolean})=>{active=v.active??active;superAdmin=v.superAdmin??superAdmin;failIdentity=v.failIdentity??failIdentity;},counts:()=>({calls,adminCalls,revoked,redeemed})};
 }
 
 test('operations config is opt-in and requires canonical HTTPS application origins',()=>{
@@ -75,7 +81,7 @@ test('Identity outage fails closed without leaking errors or reading the PBX',as
   const f=await fixture(t);f.change({failIdentity:true});
   const r=await f.request('/ops/api/tenants/2/extensions',f.auth);assert.equal(r.status,503);assert.doesNotMatch(await r.text(),/secret/);assert.equal(f.counts().calls,0);
 });
-test('mutations are absent and logout requires same-origin CSRF proof',async t=>{
+test('non-API mutations are absent and logout requires same-origin CSRF proof',async t=>{
   const f=await fixture(t);
   assert.equal((await f.request('/ops/api/status',f.auth,'POST')).status,405);
   assert.equal((await f.request('/ops/auth/logout',f.auth,'POST')).status,403);
@@ -83,6 +89,32 @@ test('mutations are absent and logout requires same-origin CSRF proof',async t=>
   const headers={...f.auth,'x-csrf-token':session.csrfToken,origin:'https://attacker.example.test'};
   assert.equal((await f.request('/ops/auth/logout',headers,'POST')).status,403);
   headers.origin=origin;assert.equal((await f.request('/ops/auth/logout',headers,'POST')).status,200);assert.equal(f.counts().revoked,1);
+});
+test('authenticated Admin gateway scopes tenants and requires same-origin CSRF for every mutation',async t=>{
+  const f=await fixture(t);
+  assert.equal((await f.request('/ops/api/v1/admin/test?iTenantId=2',f.auth)).status,200);
+  assert.equal((await f.request('/ops/api/v1/admin/test?iTenantId=3',f.auth)).status,403);
+  assert.equal((await f.request('/ops/api/v1/admin/internal',f.auth)).status,404);
+  assert.equal(f.counts().adminCalls,1);
+
+  assert.equal((await f.request('/ops/api/v1/admin/calls/mine/commands',f.auth,'POST')).status,403);
+  const session:any=await (await f.request('/ops/api/session',f.auth)).json();
+  const headers={...f.auth,origin,'x-csrf-token':session.csrfToken,'content-type':'application/json'};
+  const accepted=await f.request('/ops/api/v1/admin/calls/mine/commands',headers,'POST',JSON.stringify({commandType:'DRAIN_ACK',idempotencyKey:'ui-1'}));
+  assert.equal(accepted.status,202);assert.deepEqual(await accepted.json(),{received:{commandType:'DRAIN_ACK',idempotencyKey:'ui-1'},operator:{userId:1,email:'admin@example.test'}});
+  assert.equal((await f.request('/ops/api/v1/admin/calls/other/commands',headers,'POST')).status,404);
+  assert.equal((await f.request('/ops/api/v1/admin/test?iTenantId=2',headers,'DELETE')).status,200);
+  assert.equal(f.counts().adminCalls,3);
+});
+test('interactive API documentation is authenticated and injects CSRF for commands',async t=>{
+  const f=await fixture(t);
+  assert.equal((await f.request('/ops/docs')).status,401);
+  assert.equal((await f.request('/ops/docs',f.auth)).status,200);
+  const initializer=await (await f.request('/ops/docs/initialize.js',f.auth)).text();
+  assert.match(initializer,/supportedSubmitMethods/);assert.match(initializer,/x-csrf-token/);
+  const contract:any=await (await f.request('/ops/openapi.json',f.auth)).json();
+  assert.equal(contract.servers[0].url,'/ops/api');assert.ok(contract.paths['/v1/admin/calls/{id}/commands']);
+  assert.equal(contract.paths['/v1/integrations/livekit/webhooks'],undefined);
 });
 test('live diagnostics use fixed GETs, whitelist response fields and distinguish unavailable from empty',async t=>{
   const seen:string[]=[];

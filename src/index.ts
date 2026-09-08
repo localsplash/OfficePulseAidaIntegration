@@ -8,7 +8,8 @@ import { Logger } from './logging/logger.js';
 import { Readiness } from './readiness.js';
 import { HttpApi, publicApiOptions } from './http/httpServer.js';
 import { voiceAvailability } from './http/voiceAvailability.js';
-import { legacyPbxProvisioning, mysqlPbxInventory, pbxInventoryRoutes } from './pbx/inventory.js';
+import { mysqlPbxInventory, pbxInventoryRoutes } from './pbx/inventory.js';
+import { assembleApiRoutes } from './http/apiRoutes.js';
 import { buildRoutes } from './http/routes.js';
 import { FastAgiServer } from './agi/fastAgiServer.js';
 import { createBootstrapHandler } from './agi/bootstrapHandler.js';
@@ -202,11 +203,11 @@ async function main(): Promise<void> {
       defaultRingTimeoutSeconds: config.takeover.ringTimeoutSeconds,
     }), config.voiceEnabled);
       const commandRoute = privateRoutes.find((r) => r.method === 'POST' && r.pattern.endsWith('/commands'))!;
-      return [
-        ...deviceRoutes({ store: devices, runtime: runtimeStore, config: configRepository, tenantEnabled, livekit: config.livekit, voiceEnabled: config.voiceEnabled, commandRoute }),
-        ...pbxInventoryRoutes(pbxInventory?.reader ?? { extensions: async () => [], queues: async () => [] }, config.pbxInventoryScopes, !!pbxInventory),
-        ...legacyPbxProvisioning(privateRoutes, config.legacyPbxProvisioningEnabled).map((r) => r.pattern.startsWith('/v1/calls/') ? { ...r, pattern: r.pattern.replace('/v1/calls/', '/v1/admin/calls/') } : r),
-      ];
+      return assembleApiRoutes(
+        deviceRoutes({ store: devices, runtime: runtimeStore, config: configRepository, tenantEnabled, livekit: config.livekit, voiceEnabled: config.voiceEnabled, commandRoute }),
+        pbxInventoryRoutes(pbxInventory?.reader ?? { extensions: async () => [], queues: async () => [] }, config.pbxInventoryScopes, !!pbxInventory),
+        privateRoutes, config.legacyPbxProvisioningEnabled,
+      );
     })();
 
   const httpOptions = {

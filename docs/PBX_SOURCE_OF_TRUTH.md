@@ -76,7 +76,7 @@ SQL configuration is not running Asterisk state. Runtime registrations, device s
 
 ## Historical compatibility and remaining work
 
-The former extension/ring-group/DID/handset provisioning routes return 409 by default. `LEGACY_PBX_PROVISIONING_ENABLED=true` re-enables the historical private writers only for a deliberate rollback. It does not turn ring groups into queues. Existing vendor data, integration bookkeeping and runtime data are preserved; no destructive schema or data migration is included.
+The former extension/ring-group/DID/handset provisioning routes, including private device enrollment issuance and device revocation, return 409 by default. Existing bearer-authenticated device access/logout and already-issued enrollment consumption remain compatible. `LEGACY_PBX_PROVISIONING_ENABLED=true` re-enables the historical private writers only for a deliberate rollback. It does not turn ring groups into queues. Existing vendor data, integration bookkeeping and runtime data are preserved; no destructive schema or data migration is included.
 
 The existing call runtime still contains legacy `RING_GROUP` destination and NocoDB lookup paths. They are retained for current calls and rollback, and are not a completed queue-native routing implementation. Before business DID routing edits can resume, implement and validate native endpoint/queue references through the OfficePulse-supported command boundary, including tenant ownership, actual dialplan destinations and fail-safe behavior. Do not silently rename old UUID destinations to queue names or bulk-convert rows.
 

@@ -26,8 +26,9 @@ Public and private listeners are distinct: private routes are absent from the pu
 
 Existing compatibility contract; AidaHandset/AidaAgent changes are deferred while
 native PBX references and API access are established. The historical PBX writers
-are disabled unless `LEGACY_PBX_PROVISIONING_ENABLED=true`; device authentication
-and revocation remain available independently for existing enrollments.
+and private enrollment/revocation routes are disabled unless
+`LEGACY_PBX_PROVISIONING_ENABLED=true`. Existing device capabilities retain their
+authenticated access/logout paths; no new handset work is introduced.
 
 A device credential is a scoped hardware capability, not a second staff session authority. Its tenant and extension come from a trusted provisioning grant; a MAC address or client-supplied tenant is never authentication.
 

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { credentialHash, deviceRoutes, type DeviceGrant, type DeviceStore } from '../src/devices/access.js';
 import { voiceAvailability } from '../src/http/voiceAvailability.js';
+import { assembleApiRoutes } from '../src/http/apiRoutes.js';
 import { FakeRuntimeStore } from './helpers/fakeRuntime.js';
 import type { ApiRequest, Route } from '../src/http/httpServer.js';
 
@@ -51,6 +52,25 @@ test('public call API denies absent and fabricated credentials', async () => {
   await assert.rejects(f.invoke('/v1/calls', undefined, null), { status: 401 });
   await assert.rejects(f.invoke('/v1/calls', undefined, 'x'.repeat(43)), { status: 401 });
   assert.equal(f.routes.find((r) => r.pattern === '/v1/provisioning/device-enrollments')?.trusted, undefined);
+});
+
+test('default provisioning gate covers real device issuance and private revocation routes', async () => {
+  const f = fixture();
+  const routes = assembleApiRoutes(f.routes, [], [], false);
+  for (const route of routes.filter((candidate) => candidate.pattern.startsWith('/v1/provisioning/'))) {
+    const result = await route.handler({ method: route.method, path: route.pattern,
+      params: { deviceId: f.device.id }, body: { iTenantId: 1, extensionId: 'ext-1' },
+      headers: {}, clientIp: '127.0.0.1', correlationId: 'gate-test' });
+    assert.equal(result.status, 409);
+  }
+  assert.equal(f.enrollments.size, 0);
+  assert.equal(f.sessions.has(credentialHash(f.token)), true);
+  // Existing device capabilities retain their authenticated access/logout path.
+  assert.equal(routes.find((r) => r.pattern === '/v1/devices/logout')?.handler,
+    f.routes.find((r) => r.pattern === '/v1/devices/logout')?.handler);
+  const enabled = assembleApiRoutes(f.routes, [], [], true);
+  assert.equal(enabled.find((r) => r.pattern === '/v1/provisioning/device-enrollments')?.handler,
+    f.routes.find((r) => r.pattern === '/v1/provisioning/device-enrollments')?.handler);
 });
 
 test('device call DTO excludes provisioning context and issues a short data-only token', async () => {

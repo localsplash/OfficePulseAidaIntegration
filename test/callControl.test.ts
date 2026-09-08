@@ -1,16 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildRoutes, type RouteDeps } from '../src/http/routes.js';
-import { FallbackResolver } from '../src/orchestrator/fallbackResolver.js';
 import { FakeRuntimeStore } from './helpers/fakeRuntime.js';
-import { FakeRealtimeStore } from './helpers/fakeStore.js';
-import { captureLogger } from './helpers/capture.js';
 import type { ApiRequest, ApiResponse, Route } from '../src/http/httpServer.js';
 
 /**
  * Allowlisted call-control endpoints backed by durable local state
  * (issue #9). Commands are idempotent by (session, key) and may not
- * redirect a call away from its provisioned destination.
+ * redirect a call away from its pinned destination.
  */
 
 const CALL_ID = '11111111-2222-4333-8444-555555555555';
@@ -22,29 +19,19 @@ interface Harness {
 }
 
 function harness(): Harness {
-  const { logger } = captureLogger();
   const runtime = new FakeRuntimeStore();
-  const realtime = new FakeRealtimeStore();
   runtime.seedSession({
     id: CALL_ID,
     tenantId: 'tenant-1',
     destinationType: 'EXTENSION',
     destinationId: 'ext-1',
   });
-  realtime.objects.set('EXTENSION|ext-1', {
-    kind: 'EXTENSION',
-    external_id: 'ext-1',
-    tenant_id: 'tenant-1',
-    context: 'office-main',
-    exten: '100',
-    endpoint_id: '100-abc',
-    enabled: 1,
-  });
-
   const takeoverCalls: unknown[] = [];
   const deps = {
     runtime,
-    fallbackResolver: new FallbackResolver({ runtime, realtime, logger }),
+    destinationResolver: { async resolveDestination(_type: string, id: string, tenantId: string) {
+      return id === 'ext-1' && tenantId === 'tenant-1' ? { context: 'office-main', exten: '100' } : undefined;
+    } },
     takeover: {
       async takeover(command: unknown) {
         takeoverCalls.push(command);
@@ -158,24 +145,22 @@ test('a missing idempotency key is refused before anything runs', async () => {
 });
 
 test('a failed command is recorded as failed so a replay does not silently succeed', async () => {
-  const { logger } = captureLogger();
   const runtime = new FakeRuntimeStore();
-  const realtime = new FakeRealtimeStore();
   runtime.seedSession({ id: CALL_ID, tenantId: 'tenant-1', destinationType: 'EXTENSION', destinationId: 'ext-1' });
-  // Destination is not provisioned locally, so resolution fails.
+  // Destination is not available locally, so resolution fails.
   const routes = buildRoutes({
     runtime,
-    fallbackResolver: new FallbackResolver({ runtime, realtime, logger }),
+    destinationResolver: { async resolveDestination() { return undefined; } },
     takeover: { async takeover() { throw new Error('unreached'); } },
     defaultRingTimeoutSeconds: 20,
   } as unknown as RouteDeps);
 
-  await assert.rejects(call(routes, 'POST', `/v1/calls/${CALL_ID}/commands`, TAKEOVER), /is not provisioned/);
+  await assert.rejects(call(routes, 'POST', `/v1/calls/${CALL_ID}/commands`, TAKEOVER), /is not available/);
   assert.equal([...runtime.commands.values()][0]?.status, 'failed');
   const replay = await call(routes, 'POST', `/v1/calls/${CALL_ID}/commands`, TAKEOVER);
   assert.equal(replay.status, 409, 'a handset must not interpret a recorded failure as acceptance');
   assert.equal((replay.body as { status: string }).status, 'failed');
-  assert.equal(JSON.stringify(replay.body).includes('is not provisioned'), false);
+  assert.equal(JSON.stringify(replay.body).includes('is not available'), false);
 });
 
 test('call state and durable events are readable back', async () => {
@@ -207,4 +192,21 @@ test('the LiveKit webhook route is the only one exempt from CIDR gating', () => 
   assert.equal(untrusted[0]?.pattern, '/v1/integrations/livekit/webhooks');
   // It must receive the raw body, or the signature cannot be verified.
   assert.equal(untrusted[0]?.rawBody, true);
+});
+
+test('canonical TAKEOVER fails before claim; DRAIN_ACK remains idempotent', async () => {
+  const runtime = new FakeRuntimeStore();
+  runtime.seedSession({ id: CALL_ID, tenantId: '1' });
+  let drains = 0;
+  const routes = buildRoutes({ runtime, takeover: { async acknowledgeDrain() { drains++; return { status: 'drained' }; } } } as unknown as RouteDeps);
+  const before = await runtime.getCallSession(CALL_ID);
+  const response = await call(routes, 'POST', `/v1/calls/${CALL_ID}/commands`, TAKEOVER);
+  assert.equal(response.status, 503);
+  assert.equal((response.body as { error: string }).error, 'native_destination_unavailable');
+  assert.equal(runtime.commands.size, 0);
+  assert.equal((await runtime.getCallSession(CALL_ID))?.version, before?.version);
+  const drain = { commandType: 'DRAIN_ACK', idempotencyKey: 'drain' };
+  assert.equal((await call(routes, 'POST', `/v1/calls/${CALL_ID}/commands`, drain)).status, 202);
+  assert.equal((await call(routes, 'POST', `/v1/calls/${CALL_ID}/commands`, drain)).status, 200);
+  assert.equal(drains, 1);
 });

@@ -14,7 +14,7 @@ test('room sweeper removes revoked and wrong-business handsets without disturbin
       listParticipants: async () => ['handset-valid', 'handset-revoked', 'handset-foreign', 'sip-caller', 'agent-aida'].map((identity) => ({ identity })),
       removeParticipant: async (_room, identity) => { removed.push(identity); } },
     devices: { getDevice: async (id) => id === 'revoked' ? undefined : { id, iTenantId: id === 'foreign' ? 2 : 1, extensionId: 'extension' } },
-    config: { getExtension: async () => ({ id: 'extension', tenantId: '1', revision: 1, extensionNumber: '101', displayName: 'Desk', asteriskContext: 'office-1', enabled: true }), ringGroupsForExtension: async () => [] },
+    config: { getExtension: async () => ({ id: 'extension', tenantId: '1', revision: 1, extensionNumber: '101', displayName: 'Desk', asteriskContext: 'office-1', enabled: true }), queueDestinationsForExtension: async () => [] },
     tenantEnabled: async () => enabled,
   });
   await guard.sweep();

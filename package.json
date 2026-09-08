@@ -1,7 +1,7 @@
 {
   "name": "officepulse-aida-integration",
   "version": "0.1.0",
-  "description": "OfficePulse Aida integration service for LSAidaOffice01: FastAGI inbound bootstrap, ARI takeover/bridging, and Asterisk Realtime provisioning.",
+  "description": "OfficePulse private Asterisk inventory and observed-call diagnostic API.",
   "type": "module",
   "private": true,
   "engines": {

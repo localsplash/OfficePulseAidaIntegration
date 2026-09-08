@@ -15,7 +15,7 @@ export type TakeoverFailureReason = 'busy' | 'rejected' | 'no-answer' | 'failed'
 export interface TakeoverCommand {
   callSessionId: string;
   idempotencyKey: string;
-  destinationType: 'EXTENSION' | 'RING_GROUP';
+  destinationType: 'EXTENSION' | 'QUEUE';
   context: string;
   exten: string;
   ringTimeoutSeconds?: number;

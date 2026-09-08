@@ -1,9 +1,31 @@
 import type { AgiSession } from './agiSession.js';
 import type { Logger } from '../logging/logger.js';
-import type { CallOrchestrator, BootstrapDecision } from '../orchestrator/callOrchestrator.js';
+export interface BootstrapRequest {
+  officePulseInstanceId: string;
+  asteriskLinkedId: string;
+  callerNumber?: string;
+  didE164: string;
+}
+export interface BootstrapDecision {
+  disposition: 'SCREEN' | 'FALLBACK' | 'REJECT';
+  callSessionId?: string;
+  roomName?: string;
+  sipDestination?: string;
+  fallback?: { context: string; exten: string; source: string };
+  fallbackReason?: string;
+}
+export interface BootstrapDecider {
+  bootstrapInboundCall(request: BootstrapRequest): Promise<BootstrapDecision>;
+}
+/** Preserve the PBX's existing channel fallback until native queue admission is defined. */
+export const nativePbxFallback: BootstrapDecider = {
+  async bootstrapInboundCall() {
+    return { disposition: 'FALLBACK', fallbackReason: 'native-pbx-admission-not-configured' };
+  },
+};
 
 export interface BootstrapHandlerDeps {
-  orchestrator: CallOrchestrator;
+  orchestrator: BootstrapDecider;
   officePulseInstanceId: string;
   logger: Logger;
 }
@@ -30,8 +52,8 @@ function sanitizeCallerNumber(raw: string | undefined): string | undefined {
  * Reads call identity from the AGI environment, asks the local orchestrator
  * for a routing decision, and writes the AIDA_* channel variables the
  * static dialplan include consumes. Every failure mode degrades to
- * AIDA_DISPOSITION=FALLBACK with this DID's own destination, so the caller
- * always reaches a human after the local prompts.
+ * AIDA_DISPOSITION=FALLBACK. Canonical startup preserves fallback variables
+ * supplied by the PBX dialplan; no local destination projection is consulted.
  */
 export function createBootstrapHandler(deps: BootstrapHandlerDeps): (session: AgiSession) => Promise<void> {
   return async (session: AgiSession): Promise<void> => {

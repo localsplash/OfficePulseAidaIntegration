@@ -1,6 +1,6 @@
 import type { DeviceGrant } from './access.js';
 import type { CallSessionRecord, RuntimeStore } from '../runtime/store.js';
-import type { NocoConfigRepository } from '../nocodb/configRepository.js';
+import type { DeviceDirectory } from './access.js';
 import type { Logger } from '../logging/logger.js';
 
 export interface RoomGuardOptions {
@@ -11,7 +11,7 @@ export interface RoomGuardOptions {
   };
   devices: { getDevice(id: string): Promise<DeviceGrant | undefined> };
   runtime: Pick<RuntimeStore, 'getCallSession'>;
-  config: Pick<NocoConfigRepository, 'getExtension' | 'ringGroupsForExtension'>;
+  config: DeviceDirectory;
   tenantEnabled: (id: number) => Promise<boolean>;
   logger: Logger;
 }
@@ -44,7 +44,7 @@ export class DeviceRoomGuard {
             const device = await this.options.devices.getDevice(participant.identity.slice(8));
             if (storageAvailable && device && !call.endedAt && Number(call.tenantId) === device.iTenantId) {
               const extension = await this.options.config.getExtension(device.extensionId);
-              const groups = await this.options.config.ringGroupsForExtension(device.extensionId, String(device.iTenantId));
+              const groups = await this.options.config.queueDestinationsForExtension(device.extensionId, String(device.iTenantId));
               allowed = !!extension?.enabled && Number(extension.tenantId) === device.iTenantId &&
                 !!call.destinationId && [device.extensionId, ...groups].includes(call.destinationId) &&
                 await this.options.tenantEnabled(device.iTenantId);

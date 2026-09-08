@@ -1,4 +1,5 @@
-import type { DestinationType } from '../nocodb/configRepository.js';
+// Observed historical destination labels are diagnostic data, never new routing intent.
+export type DestinationType = string;
 
 /**
  * The `aidacalls_db` runtime database this service exclusively writes
@@ -65,22 +66,6 @@ export interface ControlCommandRecord {
   result?: Record<string, unknown>;
 }
 
-export interface DidFallbackRecord {
-  didRouteId: string;
-  tenantId: string;
-  didE164: string;
-  destinationType: DestinationType;
-  destinationId: string;
-  enabled: boolean;
-}
-
-export interface ProvisioningOperationRecord {
-  requestId: string;
-  kind: string;
-  externalId: string;
-  action: string;
-  status: string;
-}
 
 /** Validated LiveKit delivery; receipts and all projections commit together. */
 export interface LiveKitWebhookUpdate {
@@ -150,12 +135,6 @@ export interface RuntimeStore {
     callSessionId?: string,
   ): Promise<boolean>;
 
-  upsertDidFallback(record: DidFallbackRecord): Promise<void>;
-  getDidFallbackByDid(didE164: string): Promise<DidFallbackRecord | undefined>;
-  getDidFallbackByRouteId(didRouteId: string): Promise<DidFallbackRecord | undefined>;
-
-  recordProvisioningOperation(record: ProvisioningOperationRecord): Promise<void>;
-  getProvisioningOperation(requestId: string): Promise<ProvisioningOperationRecord | undefined>;
 
   setDependencyStatus(name: string, ready: boolean, detail?: string): Promise<void>;
 

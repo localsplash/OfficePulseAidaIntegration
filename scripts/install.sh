@@ -5,12 +5,12 @@
 #   INSTALL_DIR default /opt/aida-integration
 #
 # Expects: node >= 22 on the host, /etc/aida-integration/env populated
-# (see README configuration table), deploy/sql/schema.sql AND
-# the configured `aidacalls_db` created and granted to the runtime account.
+# (see README configuration table), and the configured `aidacalls_db` created and granted to the runtime account.
 # Startup applies the packaged runtime migrations to that database; do not
 # execute the historical runtime-schema.sql directly. Also expects
 # the Asterisk templates under asterisk/ installed on the OfficePulse
-# host. Keeps the previous release for scripts/rollback.sh.
+# host after operator review; this installer does not alter the PBX. Keeps the
+# previous service release for scripts/rollback.sh (not database rollback).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -30,6 +30,8 @@ fi
 mkdir -p "$INSTALL_DIR"
 rsync -a --delete dist "$INSTALL_DIR/"
 rsync -a package.json package-lock.json "$INSTALL_DIR/"
+mkdir -p "$INSTALL_DIR/deploy/sql"
+rsync -a deploy/sql/runtime-schema.sql deploy/sql/002_device_access.sql deploy/sql/003_event_receipts.sql deploy/sql/004_remove_retired_pbx.sql "$INSTALL_DIR/deploy/sql/"
 (cd "$INSTALL_DIR" && npm ci --omit=dev)
 
 id aida >/dev/null 2>&1 || useradd --system --home /nonexistent --shell /usr/sbin/nologin aida

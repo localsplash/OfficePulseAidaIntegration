@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { credentialHash, deviceRoutes, type DeviceGrant, type DeviceStore } from '../src/devices/access.js';
 import { voiceAvailability } from '../src/http/voiceAvailability.js';
-import { assembleApiRoutes } from '../src/http/apiRoutes.js';
 import { FakeRuntimeStore } from './helpers/fakeRuntime.js';
 import type { ApiRequest, Route } from '../src/http/httpServer.js';
 
@@ -34,7 +33,7 @@ function fixture(voiceEnabled = true) {
     store, runtime, voiceEnabled, commandRoute: voiceAvailability([commandRoute], voiceEnabled)[0]!,
     config: {
       async getExtension(id) { return id === 'ext-1' ? { id, revision: 1, tenantId: '1', extensionNumber: '101', displayName: 'Desk', asteriskContext: 'office-1', enabled: state.extensionEnabled } : undefined; },
-      async ringGroupsForExtension() { return state.groups; },
+      async queueDestinationsForExtension() { return state.groups; },
     },
     tenantEnabled: async () => state.enabled,
     livekit: { url: 'wss://livekit.example.test', apiKey: 'test-key', apiSecret: 'test-secret' },
@@ -54,23 +53,8 @@ test('public call API denies absent and fabricated credentials', async () => {
   assert.equal(f.routes.find((r) => r.pattern === '/v1/provisioning/device-enrollments')?.trusted, undefined);
 });
 
-test('default provisioning gate covers real device issuance and private revocation routes', async () => {
-  const f = fixture();
-  const routes = assembleApiRoutes(f.routes, [], [], false);
-  for (const route of routes.filter((candidate) => candidate.pattern.startsWith('/v1/provisioning/'))) {
-    const result = await route.handler({ method: route.method, path: route.pattern,
-      params: { deviceId: f.device.id }, body: { iTenantId: 1, extensionId: 'ext-1' },
-      headers: {}, clientIp: '127.0.0.1', correlationId: 'gate-test' });
-    assert.equal(result.status, 409);
-  }
-  assert.equal(f.enrollments.size, 0);
-  assert.equal(f.sessions.has(credentialHash(f.token)), true);
-  // Existing device capabilities retain their authenticated access/logout path.
-  assert.equal(routes.find((r) => r.pattern === '/v1/devices/logout')?.handler,
-    f.routes.find((r) => r.pattern === '/v1/devices/logout')?.handler);
-  const enabled = assembleApiRoutes(f.routes, [], [], true);
-  assert.equal(enabled.find((r) => r.pattern === '/v1/provisioning/device-enrollments')?.handler,
-    f.routes.find((r) => r.pattern === '/v1/provisioning/device-enrollments')?.handler);
+test('device primitives expose no private provisioning endpoints', () => {
+  assert.equal(fixture().routes.some(route => route.pattern.startsWith('/v1/provisioning/')), false);
 });
 
 test('device call DTO excludes provisioning context and issues a short data-only token', async () => {
@@ -106,8 +90,8 @@ test('business or extension disable takes effect for an existing device session'
 
 test('enrollment is single-use and only hashes are passed to persistence', async () => {
   const f = fixture();
-  const issued = await f.invoke('/v1/provisioning/device-enrollments', { iTenantId: 1, extensionId: 'ext-1' }, null, 'POST');
-  const token = (issued.body as { enrollmentToken: string }).enrollmentToken;
+  const token = randomBytes(32).toString('base64url');
+  f.enrollments.set(credentialHash(token), { tenant: 1, extension: 'ext-1' });
   assert.equal(f.enrollments.has(token), false);
   assert.equal(f.enrollments.has(credentialHash(token)), true);
   const body = { enrollmentToken: token, deviceId: 'hardware-1' };
@@ -136,21 +120,19 @@ test('logout revokes bearer access and an ended call has no room token', async (
   await assert.rejects(f.invoke('/v1/calls'), { status: 401 });
 });
 
-test('a configured ring-group membership grants only that group destination', async () => {
+test('a configured native queue membership grants only that group destination', async () => {
   const f = fixture();
-  const group = f.runtime.seedSession({ tenantId: '1', destinationType: 'RING_GROUP', destinationId: 'group-1' });
+  const group = f.runtime.seedSession({ tenantId: '1', destinationType: 'QUEUE', destinationId: 'group-1' });
   await assert.rejects(f.invoke('/v1/calls/:callSessionId', undefined, f.token, 'GET', group.id), { status: 404 });
   f.state.groups = ['group-1'];
   assert.equal((await f.invoke('/v1/calls/:callSessionId', undefined, f.token, 'GET', group.id)).status, 200);
 });
 
 
-test('administration-only mode permits enrollment but omits room tokens and blocks takeover effects', async () => {
+test('disabled voice omits room tokens and blocks takeover effects in reusable device protocol', async () => {
   const f = fixture(false);
   const detail = await f.invoke('/v1/calls/:callSessionId');
   assert.equal((detail.body as { livekit?: unknown }).livekit, undefined);
-  const enrollment = await f.invoke('/v1/provisioning/device-enrollments', { iTenantId: 1, extensionId: 'ext-1' }, null, 'POST');
-  assert.equal(enrollment.status, 201);
   const takeover = await f.invoke('/v1/calls/:callSessionId/commands', {
     commandType: 'TAKEOVER', expectedCallVersion: 1, idempotencyKey: 'preview',
   }, f.token, 'POST');

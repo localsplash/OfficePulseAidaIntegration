@@ -1,14 +1,4 @@
-/**
- * Dependency readiness registry. Every dependency reports independently
- * (issue #9): ARI, Asterisk MySQL, runtime MySQL, NocoDB, LiveKit, Pusher,
- * and the provisioning adapter.
- *
- * `ready` is deliberately not a single boolean over all of them. Losing
- * NocoDB degrades screening but the caller still reaches a human through
- * the local fallback, whereas losing Asterisk MySQL breaks provisioning.
- * Each component therefore carries its own state and its own criticality,
- * and only a CRITICAL component failing makes the service unready.
- */
+/** Each configured dependency reports its own state; optional PBX inventory may be degraded while diagnostics remain ready. */
 
 export type Criticality = 'critical' | 'degraded';
 

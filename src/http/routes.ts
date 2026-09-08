@@ -1,27 +1,14 @@
 import type { Route } from './httpServer.js';
-import type {
-  ExtensionProvisioningService,
-  ExtensionCreateInput,
-  ExtensionUpdateInput,
-  RotateSecretInput,
-} from '../provisioning/extensions.js';
-import type { RingGroupProvisioningService, RingGroupInput } from '../provisioning/ringGroups.js';
-import type { DidProvisioningService, DidInput } from '../provisioning/dids.js';
-import type { HandsetProvisioningService, HandsetProvisionInput } from '../provisioning/handsets.js';
 import type { TakeoverManager } from '../takeover/takeoverManager.js';
 import type { RuntimeStore } from '../runtime/store.js';
-import type { FallbackResolver } from '../orchestrator/fallbackResolver.js';
 import type { LiveKitWebhookHandler } from '../livekit/webhookHandler.js';
 import { NotFoundError, ValidationError } from '../errors.js';
 
 export interface RouteDeps {
-  extensions: ExtensionProvisioningService;
-  ringGroups: RingGroupProvisioningService;
-  dids: DidProvisioningService;
-  handsets: HandsetProvisioningService;
   takeover: TakeoverManager;
   runtime: RuntimeStore;
-  fallbackResolver: FallbackResolver;
+  /** An adapter must validate native PBX destinations for this tenant; canonical startup has none yet. */
+  destinationResolver?: { resolveDestination(type: 'EXTENSION' | 'QUEUE', id: string, tenantId: string): Promise<{ context: string; exten: string } | undefined> };
   webhooks: LiveKitWebhookHandler;
   defaultRingTimeoutSeconds: number;
 }
@@ -37,69 +24,12 @@ function asObject(body: unknown): Record<string, unknown> {
 const ALLOWED_COMMANDS = new Set(['TAKEOVER', 'DRAIN_ACK']);
 
 /**
- * Private provisioning + call-control API. All routes sit behind the
+ * Private call-control API; no provisioning routes. All routes sit behind the
  * CIDR/rate/body-limit middleware in HttpApi, except the LiveKit webhook,
  * which authenticates by signature over the raw body instead.
  */
 export function buildRoutes(deps: RouteDeps): Route[] {
   return [
-    {
-      method: 'POST',
-      pattern: '/v1/provisioning/extensions',
-      handler: async (req) => {
-        const result = await deps.extensions.create(asObject(req.body) as unknown as ExtensionCreateInput);
-        return { status: result.status === 'created' ? 201 : 200, body: result };
-      },
-    },
-    {
-      method: 'PUT',
-      pattern: '/v1/provisioning/extensions/:extensionId',
-      handler: async (req) => {
-        const result = await deps.extensions.update(
-          req.params.extensionId ?? '',
-          asObject(req.body) as unknown as ExtensionUpdateInput,
-        );
-        return { status: 200, body: result };
-      },
-    },
-    {
-      method: 'POST',
-      pattern: '/v1/provisioning/extensions/:extensionId/rotate-secret',
-      handler: async (req) => {
-        const result = await deps.extensions.rotateSecret(
-          req.params.extensionId ?? '',
-          asObject(req.body) as unknown as RotateSecretInput,
-        );
-        return { status: 200, body: result };
-      },
-    },
-    {
-      method: 'PUT',
-      pattern: '/v1/provisioning/ring-groups/:ringGroupId',
-      handler: async (req) => {
-        const result = await deps.ringGroups.provision(
-          req.params.ringGroupId ?? '',
-          asObject(req.body) as unknown as RingGroupInput,
-        );
-        return { status: 200, body: result };
-      },
-    },
-    {
-      method: 'PUT',
-      pattern: '/v1/provisioning/dids/:didRouteId',
-      handler: async (req) => {
-        const result = await deps.dids.provision(req.params.didRouteId ?? '', asObject(req.body) as unknown as DidInput);
-        return { status: 200, body: result };
-      },
-    },
-    {
-      method: 'POST',
-      pattern: '/v1/provisioning/handsets',
-      handler: async (req) => {
-        const result = await deps.handsets.provision(asObject(req.body) as unknown as HandsetProvisionInput);
-        return { status: 200, body: result };
-      },
-    },
     {
       method: 'GET',
       pattern: '/v1/calls/:callSessionId',
@@ -134,6 +64,11 @@ export function buildRoutes(deps: RouteDeps): Route[] {
 
         const session = await deps.runtime.getCallSession(callSessionId);
         if (!session) throw new NotFoundError(`no call session ${callSessionId}`);
+
+        // No command row or call version change while native destination admission is unavailable.
+        if (commandType === 'TAKEOVER' && !deps.destinationResolver) return {
+          status: 503, body: { error: 'native_destination_unavailable', message: 'Native PBX queue takeover is not configured' },
+        };
 
         // A duplicate submission returns the recorded outcome instead of
         // running the command a second time.
@@ -199,19 +134,19 @@ async function runTakeover(
   // extension, and certainly not to another tenant's.
   const destinationType = (body.destinationType as string | undefined) ?? session.destinationType;
   const destinationId = (body.destinationId as string | undefined) ?? session.destinationId;
-  if (destinationType !== 'EXTENSION' && destinationType !== 'RING_GROUP') {
-    throw new ValidationError('destinationType must be EXTENSION or RING_GROUP');
+  if (destinationType !== 'EXTENSION' && destinationType !== 'QUEUE') {
+    throw new ValidationError('destinationType must be EXTENSION or QUEUE');
   }
   if (!destinationId) throw new ValidationError('destinationId is required');
   if (
     session.destinationId !== undefined &&
     (destinationId !== session.destinationId || destinationType !== session.destinationType)
   ) {
-    throw new ValidationError("takeover destination does not match this call's provisioned destination");
+    throw new ValidationError("takeover destination does not match this call's pinned destination");
   }
 
-  const target = await deps.fallbackResolver.resolveDestination(destinationType, destinationId, session.tenantId);
-  if (!target) throw new NotFoundError(`destination ${destinationId} is not provisioned for this tenant`);
+  const target = await deps.destinationResolver!.resolveDestination(destinationType, destinationId, session.tenantId);
+  if (!target) throw new NotFoundError(`destination ${destinationId} is not available for this tenant`);
 
   return deps.takeover.takeover({
     callSessionId,

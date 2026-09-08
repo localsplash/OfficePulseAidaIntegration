@@ -13,7 +13,7 @@ WORKDIR /app
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/node_modules ./node_modules
 COPY package.json ./
-COPY deploy/sql/runtime-schema.sql deploy/sql/002_device_access.sql deploy/sql/003_event_receipts.sql ./deploy/sql/
+COPY deploy/sql/runtime-schema.sql deploy/sql/002_device_access.sql deploy/sql/003_event_receipts.sql deploy/sql/004_remove_retired_pbx.sql ./deploy/sql/
 # Run as the unprivileged 'node' user; ports are >1024 so no capabilities
 # are needed.
 USER node

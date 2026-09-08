@@ -1,199 +1,87 @@
 # OfficePulseAidaIntegration
 
-Layer Aida onto OfficePulse without forking or modifying Asterisk source.
+The canonical development service exposes private Asterisk endpoint/queue
+inventory and read-only integration call diagnostics. Asterisk/OfficePulse is
+the source of truth for PBX configuration. AidaAdmin administers Identity
+businesses, users, roles, business numbers and AI profiles and reads PBX data
+through this service.
 
-A TypeScript/Node.js service for the office platform. The first combined deployment target is **dockerappvm01-dev**. For the POC it is both
-the **call orchestrator** and the Asterisk adapter — there is no
-AidaControl service (issue #9). It provides:
+There is no copied extension/queue desired state, provisioning synchronization,
+retry ledger, ring-group adapter or rollback switch. PBX writers and the NocoDB
+routing graph have been removed. Reusable ARI, LiveKit, FastAGI, takeover and
+device modules and their tests remain. With voice enabled, ARI reconciliation,
+signed LiveKit callbacks and FastAGI still run; native queue admission is pending,
+so bootstrap preserves PBX fallback and TAKEOVER returns 503 before recording a
+command. DRAIN_ACK remains supported. Canonical device admission is unwired until
+native PBX authorization is defined. AidaHandset/AidaAgent work is deferred.
 
-1. **Inbound call orchestration** — FastAGI resolves the DID route and
-   assistant profile directly from the shared PlatformConfig NocoDB base, pins the
-   configuration it used onto a local call session, creates the LiveKit
-   room, dispatches the predefined `aida-prime` agent, and hands Asterisk
-   the routing variables.
-2. **ARI takeover control** — asynchronous multi-channel control: bridge
-   the caller with the LiveKit/Aida leg, ring a human on command, connect
-   the human instantly on answer, and drain Aida within a bounded window.
-3. **PBX inventory API** — AidaAdmin reads native endpoint and queue configuration
-   from Asterisk through the private OfficePulse API. Asterisk is the PBX source
-   of truth; AidaAdmin does not maintain extension/queue copies or sync status.
-   Historical provisioning writers are disabled by default.
+## Current API
 
-The [PBX source-of-truth decision and API contract](docs/PBX_SOURCE_OF_TRUTH.md)
-defines the POC reads, tenant authorization references, queue semantics and
-remaining supported command/routing and operations UI work. It supersedes the
-historical ring-group provisioning architecture below.
+| Listener | Routes | Access |
+| --- | --- | --- |
+| Private `HTTP_PORT=8085` | `/v1/admin/pbx/extensions?iTenantId=N`, `/v1/admin/pbx/queues?iTenantId=N` | CIDR-admitted Admin server; explicit operator tenant scope |
+| Private `HTTP_PORT=8085` | `/v1/admin/calls/:id`, `/v1/admin/calls/:id/events` | Read-only observed integration call history |
+| Private `HTTP_PORT=8085` | POST `/v1/admin/calls/:id/commands` | DRAIN_ACK with voice enabled; TAKEOVER unavailable until native routing exists |
+| Public `PUBLIC_HTTP_PORT=8086` | `/healthz`, `/readyz`, signed LiveKit webhook | Callback verifies signature; disabled voice returns 503 |
 
-## Data ownership
+Retired provisioning and canonical device paths are absent (404 inside the
+private boundary); setting old provisioning flags cannot restore them.
+The private API is not browser authentication: AidaAdmin must authenticate its
+staff actor and authorize the requested tenant/call before forwarding a request.
 
-Applications may read shared databases, but each data set has exactly one
-writer:
-
-| Data set | Writer | This service |
-|---|---|---|
-| NocoDB `PlatformConfig` business/AI settings and PBX references | AidaAdmin | **reads only** |
-| Asterisk endpoint, queue and dialplan configuration | OfficePulse PBX operations | **reads** through an explicit tenant scope; legacy writes require rollback opt-in |
-| `aidacalls_db` runtime MySQL | this service | **writes** |
-| `aidacalls_db` (AidaAdmin's view) | — | AidaAdmin reads via a read-only account; commands stay HTTP actions |
-
-The [platform API and cutover contract](docs/PLATFORM_API.md) defines canonical
-Identity tenant IDs, device authentication, startup migrations and the separate
-public/private HTTP listeners. It supersedes conflicting legacy interface text.
-
-## Project invariant
-
-**No Aida failure or cleanup operation may tear down an established
-caller-human bridge.** The takeover manager only ever removes the
-LiveKit/Aida leg; if the human disappears during the drain window, the
-drain is aborted and the caller stays with Aida.
-
-## Historical call flow (queue-native cutover pending)
-
-```
-inbound DID (Realtime rows, written by this service's provisioning API)
-  -> recording disclosure (always, before FastAGI/LiveKit)
-  -> AGI(agi://LSAidaOffice01:4573/bootstrap)
-       -> read DID route + assistant profile from the NocoDB PlatformConfig base
-       -> persist call_session with the configuration ids AND revisions pinned
-       -> create LiveKit room, dispatch `aida-prime`, notify the handset
-       -> sets AIDA_DISPOSITION + routing channel variables
-  -> [aida-post-bootstrap] static include
-       SCREEN   -> Stasis(aida) -> ARI originates the LiveKit SIP-trunk leg
-                   with the X-Aida-Call-Session header, bridges
-                   caller <-> Aida  (media stays Asterisk<->LiveKit)
-       FALLBACK -> failure prompt -> direct Dial to destination, with the
-                   extension-side incident prompt on answer
-       REJECT   -> hangup
-  takeover command (AidaAdmin/AidaHandset -> this service)
-       -> single idempotent originate to extension/ring group
-       -> MOH while ringing; on answer: human joins bridge immediately,
-          Aida drains (<= 10 s or on drain-ack), only the Aida leg is removed
-```
-
-**Local fail-safe.** If NocoDB, LiveKit, or the runtime database is
-unavailable, the caller is still routed to *this DID's own* destination,
-resolved from a projection written at provisioning time — never to another
-tenant's destination. A deployment-wide default exists only as a final
-operator emergency fallback. If this service or ARI is down entirely, the
-dialplan alone still routes: disclosure → failure prompt → destination.
-Media never traverses this service.
-
-## Network
-
-Private HTTP `8085` serves PBX inventory and AidaAdmin administration. Public
-HTTP `8086` serves device bearer APIs and signed LiveKit webhooks through HTTPS
-at NPM. FastAGI `4573`, ARI and MySQL stay private. See the
-[firewall matrix](deploy/firewall-matrix.md) and [API contract](docs/PLATFORM_API.md).
-
-## Development
-
-```bash
-npm ci
-npm run verify      # typecheck + all unit tests (no external credentials needed)
-npm run dev         # run against a configured environment
-npm run simulate:ari   # fake ARI server (WS + REST) for local runs
-npm run simulate:agi   # place a fake FastAGI call against a running service
-```
-
-A clean checkout runs the entire test suite with fakes for Asterisk
-(FastAGI + ARI), both MySQL databases, NocoDB, LiveKit, Pusher, and the
-provisioning server — no OfficePulse, NocoDB, or LiveKit credentials are
-required.
+Read the [PBX inventory contract](docs/PBX_SOURCE_OF_TRUTH.md),
+[runtime contract](docs/PLATFORM_API.md) and
+[development cleanup manifest](docs/DEV_CLEANUP.md).
 
 ## Configuration
 
-`NOCODB_BASE_URL` and `NOCODB_API_TOKEN` bootstrap PlatformConfig. Runtime settings
-resolve nonblank environment overrides, then `officepulse`, `aida` and `*` scopes.
-Restart after changing settings. The inventory can run with voice disabled.
+`NOCODB_BASE_URL` and `NOCODB_API_TOKEN` bootstrap `PlatformConfig.cfg_tbl_Setting`.
+Nonblank environment overrides take precedence over `officepulse`, `aida`, then
+`*` scopes. Restart after changing settings. OfficePulse no longer reads
+AidaAdmin's extension, ring-group, DID, device or business-profile tables.
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `NODE_ENV` | development | production requires all credentials + non-empty CIDRs |
-| `OFFICEPULSE_INSTANCE_ID` | — (required in prod) | instance identifier recorded on every call session |
-| `FASTAGI_PORT` / `FASTAGI_BIND` | 4573 / 0.0.0.0 | FastAGI listener |
-| `FASTAGI_ADVERTISED_HOST` | aida-integration.internal | host written into provisioned AGI() rows |
-| `FASTAGI_MAX_CONNECTIONS` / `FASTAGI_SESSION_TIMEOUT_MS` | 50 / 10000 | FastAGI hardening |
-| `HTTP_PORT` / `HTTP_BIND` | 8085 / 0.0.0.0 | private HTTP API |
-| `TRUSTED_SERVER_CIDRS` | — (required in prod) | callers allowed on `/v1/*` |
-| `TRUSTED_PROXY_CIDRS` | empty | peers whose X-Forwarded-For is honored |
-| `HTTP_RATE_LIMIT_PER_MINUTE` / `HTTP_MAX_BODY_BYTES` | 300 / 65536 | API rate/body limits |
-| `ARI_URL` / `ARI_USERNAME` / `ARI_PASSWORD` / `ARI_APP` | — / — / — / aida | ARI connection |
-| `MYSQL_HOST` / `MYSQL_PORT` / `MYSQL_USER` / `MYSQL_PASSWORD` / `MYSQL_DATABASE` | — | Asterisk Realtime DB |
-| `PBX_INVENTORY_ENABLED` | false | enable private PBX configuration reads, independently of LiveKit voice connectors |
-| `PBX_INVENTORY_MYSQL_USER` / `PBX_INVENTORY_MYSQL_PASSWORD` | — | dedicated SELECT-only account on the same PBX host/database |
-| `PBX_INVENTORY_TENANTS_JSON` | no scopes | operator-owned tenant-to-context/queue-name allowlist; see the PBX contract |
-| `LEGACY_PBX_PROVISIONING_ENABLED` | false | explicit rollback opt-in for historical provisioning writes |
-| `RUNTIME_MYSQL_HOST` / `_PORT` / `_USER` / `_PASSWORD` / `_DATABASE` | Asterisk host / 3306 / — / — / aidacalls_db | runtime DB this service owns |
-| `NOCODB_BASE_URL` / `NOCODB_API_TOKEN` / `NOCODB_BASE_NAME` / `NOCODB_TIMEOUT_MS` | — / — / PlatformConfig / 4000 | read-only configuration base |
-| `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` / `LIVEKIT_SIP_HOST` | — (required in prod) | room control, agent dispatch, webhook verification, SIP destination |
-| `LIVEKIT_AGENT_NAME` / `LIVEKIT_TIMEOUT_MS` | aida-prime / 5000 | predefined agent to dispatch |
-| `PUSHER_APP_ID` / `PUSHER_KEY` / `PUSHER_SECRET` / `PUSHER_CLUSTER` | unset | call-arrival notification (notification only) |
-| `CALL_DEFAULT_LOCALE` | en-US | locale passed in per-call agent metadata |
-| `OPERATOR_FALLBACK_CONTEXT` / `OPERATOR_FALLBACK_EXTENSION` | unset | emergency fallback; both or neither |
-| `PROVISIONING_SERVER_BASE_URL` / `_AUTH_TOKEN` / `_TIMEOUT_MS` | unset | existing HTTPS provisioning server |
-| `HANDSET_API_URL` | derived | URL AidaHandset enrols against |
-| `LIVEKIT_TRUNK_ENDPOINT` | unset | PJSIP endpoint name of the existing LiveKit SIP trunk |
-| `TAKEOVER_RING_TIMEOUT_SECONDS` / `TAKEOVER_DRAIN_TIMEOUT_MS` | 20 / 10000 | takeover behavior |
-| `TAKEOVER_DEFAULT_MOH_CLASS` | default | hold treatment while the destination rings |
-| `DIALPLAN_*`, `DEFAULT_SIP_TRANSPORT`, `DEFAULT_SIP_ALLOW` | see `src/config.ts` | dialplan/codec defaults |
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `HTTP_PORT` / `PUBLIC_HTTP_PORT` / `HTTP_BIND` | 8085 / 8086 / 0.0.0.0 | Private API and health/callback listener |
+| `TRUSTED_SERVER_CIDRS` / `TRUSTED_PROXY_CIDRS` | Required in production / empty | Separate service and proxy trust |
+| `HTTP_RATE_LIMIT_PER_MINUTE` / `HTTP_MAX_BODY_BYTES` | 300 / 65536 | HTTP limits |
+| `RUNTIME_MYSQL_HOST`, `RUNTIME_MYSQL_PORT`, `RUNTIME_MYSQL_USER`, `RUNTIME_MYSQL_PASSWORD` | Explicit production values / port 3306 | Integration diagnostics database |
+| `RUNTIME_MYSQL_DATABASE` | aidacalls_db | Only canonical runtime schema; migrations reject the external asterisk schema |
+| `NOCODB_BASE_URL`, `NOCODB_API_TOKEN`, `NOCODB_BASE_NAME`, `NOCODB_TIMEOUT_MS` | Required / PlatformConfig / 4000 | Scoped settings discovery |
+| `PBX_INVENTORY_ENABLED` | false | Enable private vendor configuration reads |
+| `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE` | Explicit production values / port 3306 | External OfficePulse vendor database coordinates |
+| `PBX_INVENTORY_MYSQL_USER`, `PBX_INVENTORY_MYSQL_PASSWORD` | Required when inventory enabled | Dedicated SELECT-only account |
+| `PBX_INVENTORY_TENANTS_JSON` | no mappings | Reviewed tenant-to-context/queue allowlist |
 
-## Deployment
+`VOICE_ENABLED=false` is the canonical development setting. With voice enabled,
+`ARI_URL`, `ARI_USERNAME`, `ARI_PASSWORD`, `LIVEKIT_URL`, `LIVEKIT_API_KEY`,
+`LIVEKIT_API_SECRET` and `LIVEKIT_SIP_HOST` remain required in production;
+`OFFICEPULSE_INSTANCE_ID` identifies this service. `FASTAGI_PORT` defaults to 4573,
+`FASTAGI_BIND` to 0.0.0.0. Existing takeover timing/MOH and optional Pusher settings
+remain supported. PBX writer credentials and Identity/device-admission settings
+are no longer required by startup. Native queue admission is reported unavailable
+independently from connector readiness.
 
-- `deploy/sql/schema.sql` — bookkeeping tables (in the Realtime DB).
-- `deploy/sql/runtime-schema.sql` — historical baseline consumed by the startup migration runner, which targets configured `aidacalls_db`; do not execute it directly
-  (call sessions/events, control commands, LiveKit participants, webhook
-  deliveries, provisioning operations, dependency status, DID fallback
-  projection). No transcript table exists by design.
-- `deploy/sql/grants.sql` — least-privilege MySQL account.
-- `deploy/sql/pbx-inventory-grants.sql` — separate read-only PBX inventory account; manually apply only after verifying the installed realtime mapping.
-- `asterisk/` — dialplan include, ARI/HTTP/extconfig/MOH templates for
-  the OfficePulse host.
-- `deploy/systemd/aida-integration.service` + `scripts/install.sh` /
-  `scripts/validate.sh` / `scripts/rollback.sh` — host install with kept
-  previous release; or `Dockerfile` (non-root) for containers.
-- `prompts/` + `scripts/generate-prompts.sh` / `scripts/deploy-prompts.sh`
-  — checksum-pinned prompt pipeline; corrupt or missing audio fails
-  deployment before any reload.
+Readiness reports runtime MySQL and NocoDB as critical, and PBX inventory as a
+separate degraded component when not configured/unavailable. ARI is critical
+when voice is enabled; LiveKit and native-admission availability are reported
+separately. It never claims
+live PBX registrations or calls were validated. With no external PBX connection,
+Admin shows inventory unavailable while business administration and integration
+history remain usable.
 
-## Security model (POC)
+## Development and deployment
 
-- Private-LAN CIDR trust on the HTTP API, enforced in the firewall *and*
-  in-process (`TRUSTED_SERVER_CIDRS`); production refuses to start with
-  an empty allowlist. `X-Forwarded-For` is trusted only from
-  `TRUSTED_PROXY_CIDRS`.
-- SIP secrets exist **only** in `ps_auths`, returned exactly once on
-  create/rotation. Enrollment tokens pass through a single provisioning
-  transaction. Log redaction is structural (key-name based) and applies
-  to every log line; the route token is never logged.
-- Idempotency: linkedid for bootstrap (one call session and one LiveKit
-  room per call), requestId for provisioning, idempotency keys for control
-  commands, delivery ids for webhooks — all enforced by unique constraints
-  rather than by convention.
-- A create or rotation **replay never re-serves an existing SIP secret**;
-  it reports the operation as already applied, and recovering a lost
-  response requires an explicit, auditable rotation.
-- Per-call agent metadata is a strict allowlist: prompt/business context,
-  identifiers and locale only. Model, STT, TTS and voice are inherited from
-  the predefined `aida-prime` agent and are never sent.
-- MAC addresses are lookup data only — never an authentication factor.
-- Logs and metrics correlate by `callSessionId`/`linkedid` only.
-- A fallback destination is always tenant-checked: routing one tenant's
-  caller into another tenant's extension is refused outright, even when
-  that leaves only congestion.
+Use Node 22: `npm ci`, `npm run verify`, then `npm run build`. The Dockerfile
+builds a non-root runtime image. The current authorized deployment is
+`dockerappvm01-dev`; it does not change the separate physical OfficePulse PBX.
+Startup runs the original checksum-verified runtime migrations followed by the
+explicit two-table projection cleanup migration described in the manifest. This development data is disposable;
+no old configuration copies, compatibility switch or rollback window is needed.
+The systemd installer and generic Asterisk templates remain available for separately
+reviewed deployments; this change does not execute them or modify the PBX host.
 
-
-### Administration preview before voice provisioning
-
-Set `VOICE_ENABLED=false` on a new preview deployment to run the database-backed
-administration and device APIs before configuring PBX and LiveKit. Runtime MySQL,
-Identity and PlatformConfig remain required, including an explicit
-`RUNTIME_MYSQL_HOST`. ARI, FastAGI, voice dependency probes and room monitoring do
-not start; PBX changes, call commands and LiveKit webhooks return 503, and device
-responses omit room tokens. `/healthz` returns 200 while `/readyz` reports the
-disabled dependencies with 503. Use health for container liveness; readiness still
-means the full voice service is available. The default is `VOICE_ENABLED=true`.
-
-This setting is for initial setup on an isolated deployment. Do not toggle it on
-a server with active calls or connected handset viewers, because room revocation
-monitoring stops. Supply the real voice configuration and restart with
-`VOICE_ENABLED=true` when the PBX and LiveKit project are ready.
+`TEST_MYSQL_URL` enables runtime migration/concurrency tests,
+`TEST_WEBHOOK_MYSQL_URL` tests independent event transaction primitives, and
+`TEST_PBX_MYSQL_URL` tests vendor inventory SELECT grants against disposable
+fixtures. Those tests are not actual OfficePulse MariaDB or live-call evidence.

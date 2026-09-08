@@ -9,6 +9,7 @@ import { ConfigError, ValidationError } from '../errors.js';
 export interface ApiRequest {
   method: string;
   path: string;
+  query?: URLSearchParams;
   params: Record<string, string>;
   body: unknown;
   /** Set only for routes declaring rawBody; needed for signature checks. */
@@ -208,6 +209,7 @@ export class HttpApi {
         const out = await route.handler({
           method,
           path,
+          query: url.searchParams,
           params,
           body: route.rawBody ? undefined : this.parseBody(raw),
           rawBody: route.rawBody ? raw : undefined,

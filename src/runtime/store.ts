@@ -1,7 +1,7 @@
 import type { DestinationType } from '../nocodb/configRepository.js';
 
 /**
- * The `aida_officepulse` runtime database this service exclusively writes
+ * The `aidacalls_db` runtime database this service exclusively writes
  * (issue #9). Deliberately has no transcript surface.
  */
 

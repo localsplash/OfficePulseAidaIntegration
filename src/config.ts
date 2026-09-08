@@ -40,7 +40,7 @@ export interface AppConfig {
     password: string;
     database: string;
   };
-  /** `aida_officepulse`: runtime state this service exclusively owns. */
+  /** `aidacalls_db`: runtime state this service exclusively owns. */
   runtimeMysql: {
     host: string;
     port: number;
@@ -234,7 +234,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       port: int(env, 'RUNTIME_MYSQL_PORT', 3306, problems, 1, 65535),
       user: str(env, 'RUNTIME_MYSQL_USER', problems, required('aida')),
       password: str(env, 'RUNTIME_MYSQL_PASSWORD', problems, required('dev-only')),
-      database: env.RUNTIME_MYSQL_DATABASE ?? 'aida_db',
+      database: env.RUNTIME_MYSQL_DATABASE ?? 'aidacalls_db',
     },
     nocodb: {
       baseUrl: str(env, 'NOCODB_BASE_URL', problems, required('http://127.0.0.1:8080')),

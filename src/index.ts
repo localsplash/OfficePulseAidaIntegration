@@ -34,7 +34,7 @@ import { HttpDeviceProvisioningService } from './provisioning/deviceProvisioning
  *
  * Since issue #9 this process is the call orchestrator as well as the
  * Asterisk adapter: it reads AidaAdmin's NocoDB base, owns the
- * `aida_officepulse` runtime database, and drives LiveKit directly. There
+ * `aidacalls_db` runtime database, and drives LiveKit directly. There
  * is no AidaControl.
  *
  * Startup order: validate configuration, expose health first, connect ARI

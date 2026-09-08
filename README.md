@@ -27,8 +27,8 @@ writer:
 |---|---|---|
 | NocoDB `PlatformConfig` voice tables | AidaAdmin | **reads only** |
 | Asterisk Realtime MySQL | this service | **writes** |
-| `aida_db` runtime MySQL | this service | **writes** |
-| `aida_db` (AidaAdmin's view) | — | AidaAdmin reads via a read-only account; commands stay HTTP actions |
+| `aidacalls_db` runtime MySQL | this service | **writes** |
+| `aidacalls_db` (AidaAdmin's view) | — | AidaAdmin reads via a read-only account; commands stay HTTP actions |
 
 The [platform API and cutover contract](docs/PLATFORM_API.md) defines canonical
 Identity tenant IDs, device authentication, startup migrations and the separate
@@ -109,7 +109,7 @@ required.
 | `HTTP_RATE_LIMIT_PER_MINUTE` / `HTTP_MAX_BODY_BYTES` | 300 / 65536 | API rate/body limits |
 | `ARI_URL` / `ARI_USERNAME` / `ARI_PASSWORD` / `ARI_APP` | — / — / — / aida | ARI connection |
 | `MYSQL_HOST` / `MYSQL_PORT` / `MYSQL_USER` / `MYSQL_PASSWORD` / `MYSQL_DATABASE` | — | Asterisk Realtime DB |
-| `RUNTIME_MYSQL_HOST` / `_PORT` / `_USER` / `_PASSWORD` / `_DATABASE` | Asterisk host / 3306 / — / — / aida_officepulse | runtime DB this service owns |
+| `RUNTIME_MYSQL_HOST` / `_PORT` / `_USER` / `_PASSWORD` / `_DATABASE` | Asterisk host / 3306 / — / — / aidacalls_db | runtime DB this service owns |
 | `NOCODB_BASE_URL` / `NOCODB_API_TOKEN` / `NOCODB_BASE_NAME` / `NOCODB_TIMEOUT_MS` | — / — / AidaAdmin / 4000 | read-only configuration base |
 | `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` / `LIVEKIT_SIP_HOST` | — (required in prod) | room control, agent dispatch, webhook verification, SIP destination |
 | `LIVEKIT_AGENT_NAME` / `LIVEKIT_TIMEOUT_MS` | aida-prime / 5000 | predefined agent to dispatch |
@@ -126,7 +126,7 @@ required.
 ## Deployment
 
 - `deploy/sql/schema.sql` — bookkeeping tables (in the Realtime DB).
-- `deploy/sql/runtime-schema.sql` — the `aida_db` runtime database
+- `deploy/sql/runtime-schema.sql` — historical baseline consumed by the startup migration runner, which targets configured `aidacalls_db`; do not execute it directly
   (call sessions/events, control commands, LiveKit participants, webhook
   deliveries, provisioning operations, dependency status, DID fallback
   projection). No transcript table exists by design.

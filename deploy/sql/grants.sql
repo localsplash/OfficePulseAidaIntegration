@@ -17,16 +17,16 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON asterisk.aida_object  TO 'aida_integrati
 GRANT SELECT, INSERT, UPDATE, DELETE ON asterisk.aida_device  TO 'aida_integration'@'__LSAIDAOFFICE01_IP__';
 GRANT SELECT, INSERT               ON asterisk.aida_provisioning_request TO 'aida_integration'@'__LSAIDAOFFICE01_IP__';
 
--- Runtime database (`aida_officepulse`): this service is its sole WRITER.
+-- Runtime database (`aidacalls_db`): this service is its sole WRITER.
 -- Same account, separate schema — the split keeps Asterisk's operational
 -- tables and this service's own call state independently grantable.
-GRANT SELECT, INSERT, UPDATE, DELETE ON aida_officepulse.* TO 'aida_integration'@'__LSAIDAOFFICE01_IP__';
+GRANT SELECT, INSERT, UPDATE, DELETE ON aidacalls_db.* TO 'aida_integration'@'__LSAIDAOFFICE01_IP__';
 
 -- AidaAdmin READS runtime state (call sessions, events, dependency status)
 -- through its own account. Read-only by grant, not by convention: commands
 -- stay HTTP actions, so no write privilege is issued here at all.
 CREATE USER IF NOT EXISTS 'aidaadmin_ro'@'__AIDAADMIN_IP__'
   IDENTIFIED BY '__STRONG_PASSWORD__';
-GRANT SELECT ON aida_officepulse.* TO 'aidaadmin_ro'@'__AIDAADMIN_IP__';
+GRANT SELECT ON aidacalls_db.* TO 'aidaadmin_ro'@'__AIDAADMIN_IP__';
 
 FLUSH PRIVILEGES;

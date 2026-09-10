@@ -39,8 +39,22 @@ export const openApi = {
   } },
 };
 
+export const operationsOpenApi = {
+  ...openApi,
+  info: { ...openApi.info,
+    description: 'Authenticated Super Admin access to the explicitly browser-enabled Admin API. Identity authorization is revalidated for every request; tenant scope and CSRF protections are enforced by the Operations gateway.' },
+  servers: [{ url: '/ops/api', description: 'Authenticated Operations gateway' }],
+  security: [{ operationsSession: [] }],
+  paths: Object.fromEntries(Object.entries(openApi.paths).filter(([path]) => path.startsWith('/v1/admin/'))),
+  components: { ...openApi.components, securitySchemes: {
+    operationsSession: { type: 'apiKey', in: 'cookie', name: '__Host-officepulse.sid', description: 'Established by central Identity sign-in.' },
+  } },
+};
+
 const html = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>OfficePulse API documentation</title><link rel="stylesheet" href="/docs/swagger-ui.css"></head><body><div id="swagger-ui"></div><script src="/docs/swagger-ui-bundle.js"></script><script src="/docs/initialize.js"></script></body></html>';
 const initializer = "SwaggerUIBundle({url:'/openapi.json',dom_id:'#swagger-ui',deepLinking:true,validatorUrl:null,supportedSubmitMethods:[],persistAuthorization:false});";
+const operationsHtml = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>OfficePulse authenticated API</title><link rel="stylesheet" href="/ops/docs/swagger-ui.css"></head><body><div id="swagger-ui"></div><script src="/ops/docs/swagger-ui-bundle.js"></script><script src="/ops/docs/initialize.js"></script></body></html>';
+const operationsInitializer = `(async()=>{const response=await fetch('/ops/api/session',{credentials:'same-origin',redirect:'error'});if(!response.ok){location.href='/';return;}const session=await response.json();SwaggerUIBundle({url:'/ops/openapi.json',dom_id:'#swagger-ui',deepLinking:true,validatorUrl:null,supportedSubmitMethods:['get','post','put','patch','delete'],persistAuthorization:false,requestInterceptor(request){request.credentials='same-origin';if(!['GET','HEAD','OPTIONS'].includes((request.method||'GET').toUpperCase()))request.headers['x-csrf-token']=session.csrfToken;return request;}});})()`;
 const require = createRequire(import.meta.url);
 const assets = new Map<string, Promise<Buffer>>();
 
@@ -58,6 +72,24 @@ export async function serveDocumentation(path: string, res: ServerResponse): Pro
   } else return false;
   res.writeHead(200, { 'content-type': type + '; charset=utf-8', 'x-content-type-options': 'nosniff',
     'cache-control': 'public, max-age=300', 'referrer-policy': 'no-referrer',
+    'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'",
+  });
+  res.end(body);return true;
+}
+
+/** Authenticated Swagger UI. Its same-origin requests pass through Operations authorization. */
+export async function serveOperationsDocumentation(path: string, res: ServerResponse): Promise<boolean> {
+  let body: string | Buffer, type: string;
+  if (path === '/ops/docs' || path === '/ops/docs/') { body = operationsHtml;type = 'text/html'; }
+  else if (path === '/ops/openapi.json') { body = JSON.stringify(operationsOpenApi);type = 'application/json'; }
+  else if (path === '/ops/docs/initialize.js') { body = operationsInitializer;type = 'text/javascript'; }
+  else if (path === '/ops/docs/swagger-ui.css' || path === '/ops/docs/swagger-ui-bundle.js') {
+    const name = path.slice('/ops/docs/'.length);
+    if (!assets.has(name)) assets.set(name, readFile(join(dirname(require.resolve('swagger-ui-dist/package.json')), name)));
+    body = await assets.get(name)!;type = name.endsWith('.css') ? 'text/css' : 'text/javascript';
+  } else return false;
+  res.writeHead(200, { 'content-type': type + '; charset=utf-8', 'x-content-type-options': 'nosniff',
+    'cache-control': 'no-store', 'referrer-policy': 'no-referrer',
     'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'",
   });
   res.end(body);return true;

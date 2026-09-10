@@ -70,7 +70,7 @@ async function main(): Promise<void> {
   const operations = opsConfig ? new OperationsServer(opsConfig, {
     identity: new HttpOperationsIdentity(opsConfig.identityUrl, opsConfig.identitySecret),
     readiness, live: new AriDiagnostics(opsConfig.ari), inventory: inventory?.reader,
-    scopes: config.pbxInventoryScopes, runtime,
+    scopes: config.pbxInventoryScopes, runtime, adminRoutes: routes,
   }) : undefined;
   if (operations && opsConfig) await operations.listen(opsConfig.port, config.http.bind);
   if (config.voiceEnabled) { ari.start(); await fastAgi.listen(); }

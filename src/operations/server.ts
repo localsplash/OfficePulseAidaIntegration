@@ -8,6 +8,10 @@ import type { Readiness } from '../readiness.js';
 import type { LivePbx } from './live.js';
 import { html, css, javascript } from './view.js';
 import { RateLimiter } from '../http/rateLimit.js';
+import type { Route } from '../http/httpServer.js';
+import { ValidationError } from '../errors.js';
+import { OperationsAdminGateway } from './adminGateway.js';
+import { serveOperationsDocumentation } from '../http/documentation.js';
 
 const SESSION = '__Host-officepulse.sid';
 const STATE = '__Host-officepulse.state';
@@ -25,6 +29,7 @@ export interface OperationsDependencies {
   inventory?: InventoryReader;
   scopes: PbxTenantScopes;
   runtime: Pick<RuntimeStore, 'getCallSession' | 'listCallEvents'>;
+  adminRoutes?: readonly Route[];
   now?: () => number;
 }
 
@@ -34,7 +39,9 @@ export class OperationsServer {
   private readonly states = new Map<string, number>();
   private readonly limiter = new RateLimiter(600);
   private readonly timer: NodeJS.Timeout;
+  private readonly gateway: OperationsAdminGateway;
   constructor(private readonly config: OperationsConfig, private readonly deps: OperationsDependencies) {
+    this.gateway = new OperationsAdminGateway(deps.adminRoutes ?? [], deps.runtime);
     this.server = http.createServer((req, res) => { void this.handle(req, res).catch(() => {
       if (!res.headersSent) this.send(res, 503, { error: 'Operations dependency unavailable. Please retry.' });
       else res.end();
@@ -58,6 +65,27 @@ export class OperationsServer {
     res.end(type === 'application/json' ? JSON.stringify(body) : body);
   }
   private redirect(res: http.ServerResponse, location: string) { res.writeHead(302, { location, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' });res.end(); }
+  private async readJson(req: http.IncomingMessage): Promise<unknown> {
+    const chunks: Buffer[] = [];let size = 0;
+    for await (const chunk of req) {
+      size += (chunk as Buffer).length;
+      if (size > 65_536) { const error = new Error('Request body is too large.') as Error & {status:number};error.status=413;throw error; }
+      chunks.push(chunk as Buffer);
+    }
+    const raw=Buffer.concat(chunks).toString('utf8');
+    if (!raw.trim()) return undefined;
+    try { return JSON.parse(raw); } catch { throw new ValidationError('Request body must be valid JSON.'); }
+  }
+  private sendGatewayError(res: http.ServerResponse, error: unknown) {
+    const status=(error as {status?:number}).status ?? 500;
+    const details=error instanceof ValidationError ? error.details : undefined;
+    return this.send(res,status,{error:status >= 500 ? 'Internal API error.' : (error as Error).message,...(details?.length ? {details}: {})});
+  }
+  private validCsrf(req: http.IncomingMessage, token: string): boolean {
+    const presented=req.headers['x-csrf-token'];
+    return req.headers.origin===this.config.publicUrl && typeof presented==='string' && /^[a-f0-9]{64}$/.test(presented)
+      && timingSafeEqual(Buffer.from(presented),Buffer.from(csrf(token)));
+  }
   private async handle(req: http.IncomingMessage, res: http.ServerResponse) {
     const url = new URL(req.url ?? '/', this.config.publicUrl);
     const path = url.pathname;
@@ -94,24 +122,34 @@ export class OperationsServer {
         return this.redirect(res,'/');
       } catch { return this.redirect(res,'/?login=error'); }
     }
-    if (!path.startsWith('/ops/api/') && path !== '/ops/auth/logout') return this.send(res,404,{error:'Not found'});
+    if (!path.startsWith('/ops/api/') && path !== '/ops/auth/logout' && !path.startsWith('/ops/docs') && path !== '/ops/openapi.json') return this.send(res,404,{error:'Not found'});
     const token = readCookie(req,SESSION);
     if (!/^[A-Za-z0-9_-]{20,512}$/.test(token)) return this.send(res,401,{error:'Sign in to continue.'});
     const actor = await this.deps.identity.introspect(token);
     if (!actor.active) { res.setHeader('set-cookie',cookie(SESSION,'',0));return this.send(res,401,{error:'Your session has ended. Sign in again.'}); }
     if (actor.user?.superAdmin !== true) return this.send(res,403,{error:'OfficePulse operations requires Super Admin access.'});
+    if (await serveOperationsDocumentation(path,res)) return;
     if (path === '/ops/auth/logout' && req.method === 'POST') {
-      const presented = req.headers['x-csrf-token'];
-      if (req.headers.origin !== this.config.publicUrl || typeof presented !== 'string' || !/^[a-f0-9]{64}$/.test(presented) || !timingSafeEqual(Buffer.from(presented),Buffer.from(csrf(token))))
-        return this.send(res,403,{error:'Invalid sign-out request.'});
+      if (!this.validCsrf(req,token)) return this.send(res,403,{error:'Invalid sign-out request.'});
       await this.deps.identity.revoke(token);
       res.setHeader('set-cookie',cookie(SESSION,'',0));return this.send(res,200,{ok:true});
     }
-    if (req.method !== 'GET') return this.send(res,405,{error:'This operations interface is read-only.'});
     const tenants = (actor.tenants ?? []).filter(t => t.bEnabled);
-    if (path === '/ops/api/session') return this.send(res,200,{user:actor.user,csrfToken:csrf(token),
+    if (path === '/ops/api/session' && req.method === 'GET') return this.send(res,200,{user:actor.user,csrfToken:csrf(token),
       tenants:tenants.map(t=>({id:t.iTenantId,name:t.name,mapped:this.deps.scopes.has(String(t.iTenantId))})),apiUrl:this.config.apiUrl});
-    if (path === '/ops/api/status') return this.send(res,200,{dependencies:this.deps.readiness.snapshot(),pbx:await this.deps.live.snapshot(),observedAt:new Date().toISOString()});
+    if (path === '/ops/api/status' && req.method === 'GET') return this.send(res,200,{dependencies:this.deps.readiness.snapshot(),pbx:await this.deps.live.snapshot(),observedAt:new Date().toISOString()});
+    if (path.startsWith('/ops/api/v1/admin/')) {
+      const method=(req.method ?? 'GET').toUpperCase();
+      if (!['GET','HEAD','OPTIONS'].includes(method) && !this.validCsrf(req,token)) return this.send(res,403,{error:'Invalid API request origin or CSRF token.'});
+      try {
+        const result=await this.gateway.dispatch({method,path:path.slice('/ops/api'.length),query:url.searchParams,
+          body:await this.readJson(req),headers:req.headers as Record<string,string|undefined>,clientIp:req.socket.remoteAddress ?? 'unknown',
+          tenantIds:new Set(tenants.map(tenant=>String(tenant.iTenantId))),
+          operator:{userId:actor.user.iUserId,email:actor.user.email}});
+        return result ? this.send(res,result.status,result.body ?? {}) : this.send(res,404,{error:'API route is not enabled for browser access.'});
+      } catch (error) { return this.sendGatewayError(res,error); }
+    }
+    if (req.method !== 'GET') return this.send(res,405,{error:'This operations route does not accept mutations.'});
     const match = /^\/ops\/api\/tenants\/([1-9][0-9]*)\/(extensions|queues|calls\/([A-Za-z0-9_.:-]{1,160}))$/.exec(path);
     if (!match || !Number.isSafeInteger(Number(match[1]))) return this.send(res,404,{error:'Not found'});
     const tenantId=match[1]!,kind=match[2]!;

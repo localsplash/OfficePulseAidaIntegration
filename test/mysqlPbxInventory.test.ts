@@ -38,7 +38,7 @@ test('MySQL PBX inventory uses only SELECT grants and isolates exact tenant scop
     ] }]);
     await assert.rejects(restricted.query('SELECT password FROM ps_auths'), /denied/);
     await assert.rejects(restricted.query("UPDATE ps_endpoints SET callerid='changed'"), /denied/);
-    await assert.rejects(inventory.reader.queues({ contexts: [], queueNames: ['missing'] }), /unavailable/);
+    assert.deepEqual(await inventory.reader.queues({ contexts: [], queueNames: ['missing'] }), []);
   } finally {
     await inventory?.close();
     await restricted?.end();

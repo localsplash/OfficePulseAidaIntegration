@@ -11,6 +11,8 @@ export interface AppConfig {
   voiceEnabled: boolean;
   pbxInventoryScopes: PbxTenantScopes;
   pbxInventoryMysql?: RuntimeMysqlConfig;
+  /** Dedicated least-privilege writer for explicitly enabled POC provisioning. */
+  pbxProvisioningMysql?: RuntimeMysqlConfig;
   logLevel: 'debug' | 'info' | 'warn' | 'error';
   officePulseInstanceId: string;
   fastAgi: {
@@ -145,6 +147,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   if (env.PBX_INVENTORY_ENABLED !== undefined && !['true', 'false'].includes(env.PBX_INVENTORY_ENABLED)) {
     problems.push('PBX_INVENTORY_ENABLED must be true or false');
   }
+  if (env.PBX_PROVISIONING_ENABLED !== undefined && !['true', 'false'].includes(env.PBX_PROVISIONING_ENABLED)) {
+    problems.push('PBX_PROVISIONING_ENABLED must be true or false');
+  }
   /** In production a value must be supplied; elsewhere a dev default stands in. */
   const required = (devFallback: string): string | undefined => (isProd ? undefined : devFallback);
 
@@ -174,6 +179,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       database: str(env, 'MYSQL_DATABASE', problems, required('asterisk')),
       user: str(env, 'PBX_INVENTORY_MYSQL_USER', problems),
       password: str(env, 'PBX_INVENTORY_MYSQL_PASSWORD', problems),
+    } : undefined,
+    pbxProvisioningMysql: env.PBX_PROVISIONING_ENABLED === 'true' ? {
+      host: str(env, 'MYSQL_HOST', problems, required('127.0.0.1')),
+      port: int(env, 'MYSQL_PORT', 3306, problems, 1, 65535),
+      database: str(env, 'MYSQL_DATABASE', problems, required('asterisk')),
+      user: str(env, 'PBX_PROVISIONING_MYSQL_USER', problems),
+      password: str(env, 'PBX_PROVISIONING_MYSQL_PASSWORD', problems),
     } : undefined,
     logLevel,
     officePulseInstanceId: str(env, 'OFFICEPULSE_INSTANCE_ID', problems, required('officepulse-dev')),
@@ -236,6 +248,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     },
   };
 
+  if (config.pbxProvisioningMysql && [config.runtimeMysql.user, config.pbxInventoryMysql?.user].includes(config.pbxProvisioningMysql.user)) {
+    problems.push('PBX_PROVISIONING_MYSQL_USER must be a dedicated account distinct from runtime and inventory users');
+  }
   if (problems.length > 0) throw new ConfigError(problems);
   return config;
 }

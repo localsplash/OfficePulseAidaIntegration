@@ -1,3 +1,4 @@
+import { pbxPaths, pbxSchemas } from '../pbx/openApi.js';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { readFile } from 'node:fs/promises';
@@ -13,17 +14,15 @@ const privateGet = (summary: string, parameters: unknown[], schema: unknown) => 
   tags: ['Backend API'], summary, description: access, 'x-access-policy': 'trusted-backend-network', parameters,
   responses: { '200': response('Successful read', schema), '403': response('Caller is not an admitted backend'), '404': response('Resource not found'), '422': response('Invalid request'), '503': response('Dependency or native scope unavailable') },
 });
-
 export const openApi = {
   openapi: '3.0.3', info: { title: 'OfficePulse Integration API', version: '1.0.0',
-    description: 'Native Asterisk extension and queue inventory, integration call diagnostics and signed callbacks. Asterisk is the PBX source of truth. No extension provisioning or synchronization API exists. These docs are publicly readable; administrative requests remain restricted to trusted backends. Interactive submission is disabled to avoid sending call commands from documentation. Native queue takeover is not implemented, and Dev voice is disabled.' },
+    description: 'Native Asterisk inventory and opt-in POC provisioning, integration call diagnostics and signed callbacks. Asterisk remains the PBX source of truth; provisioning writes its Realtime tables directly and keeps no desired-state copy. These docs are publicly readable; administrative requests remain restricted to trusted backends.' },
   servers: [{ url: '/', description: 'This OfficePulse API deployment' }],
   tags: [{ name: 'Health' }, { name: 'Backend API' }, { name: 'Callbacks' }],
   paths: {
     '/healthz': { get: { tags: ['Health'], summary: 'Process health', responses: { '200': response('Process is responding', { type: 'object', properties: { status: { type: 'string', example: 'ok' } } }) } } },
     '/readyz': { get: { tags: ['Health'], summary: 'Dependency readiness', description: 'HTTP 200 means critical dependencies are ready. Inspect components.pbx-inventory separately. fullyOperational stays false when voice/native admission is unavailable.', responses: { '200': response('Critical dependencies ready', reference('Readiness')), '503': response('Critical dependency unavailable', reference('Readiness')) } } },
-    '/v1/admin/pbx/extensions': { get: privateGet('Read tenant extensions', [tenant], { type: 'object', properties: { source: { type: 'string', enum: ['asterisk'] }, iTenantId: { type: 'integer' }, extensions: { type: 'array', items: reference('Extension') } } }) },
-    '/v1/admin/pbx/queues': { get: privateGet('Read tenant queues and saved members', [tenant], { type: 'object', properties: { source: { type: 'string', enum: ['asterisk'] }, iTenantId: { type: 'integer' }, queues: { type: 'array', items: reference('Queue') } } }) },
+    ...pbxPaths,
     '/v1/admin/calls/{id}': { get: privateGet('Read an observed integration call', [callId], reference('Call')) },
     '/v1/admin/calls/{id}/events': { get: privateGet('Read integration call events', [callId], { type: 'object', properties: { events: { type: 'array', items: reference('Event') } } }) },
     '/v1/admin/calls/{id}/commands': { post: { tags: ['Backend API'], summary: 'Submit an integration call command', description: access + ' Requires VOICE_ENABLED=true. DRAIN_ACK is supported; TAKEOVER returns 503 until native destination admission exists. Dev returns voice_unavailable before executing commands.', parameters: [callId], 'x-access-policy': 'trusted-backend-network', requestBody: { required: true, content: json({ type: 'object', required: ['commandType', 'idempotencyKey'], properties: { commandType: { type: 'string', enum: ['DRAIN_ACK', 'TAKEOVER'] }, idempotencyKey: { type: 'string', minLength: 1 }, expectedCallVersion: { type: 'integer' }, destinationType: { type: 'string', enum: ['EXTENSION', 'QUEUE'] }, destinationId: { type: 'string' }, ringTimeoutSeconds: { type: 'number' }, musicOnHoldClass: { type: 'string' } } }) }, responses: { '200': response('Previously recorded command result', { type: 'object' }), '202': response('Command accepted', { type: 'object' }), '403': response('Caller denied'), '404': response('Call not found'), '409': response('Conflict or previously failed command'), '422': response('Invalid command'), '503': response('Voice or native destination unavailable') } } },
@@ -32,8 +31,7 @@ export const openApi = {
   components: { schemas: {
     Error: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' }, details: { type: 'array', items: { type: 'string' } } } },
     Readiness: { type: 'object', properties: { ready: { type: 'boolean' }, fullyOperational: { type: 'boolean' }, components: { type: 'object', additionalProperties: { type: 'object', properties: { ready: { type: 'boolean' }, criticality: { type: 'string', enum: ['critical', 'degraded'] }, detail: { type: 'string' }, since: { type: 'string', format: 'date-time' } } } } } },
-    Extension: { type: 'object', properties: { id: { type: 'string' }, context: { type: 'string' }, callerId: { type: 'string', nullable: true }, transport: { type: 'string', nullable: true }, aors: { type: 'string', nullable: true } } },
-    Queue: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' }, strategy: { type: 'string', nullable: true }, members: { type: 'array', items: { type: 'object', properties: { interface: { type: 'string' }, memberName: { type: 'string', nullable: true }, penalty: { type: 'number' }, paused: { type: 'boolean' } } } } } },
+    ...pbxSchemas,
     Call: { type: 'object', properties: { id: { type: 'string' }, asteriskLinkedId: { type: 'string' }, officePulseInstanceId: { type: 'string' }, tenantId: { type: 'string' }, callerNumber: { type: 'string' }, didE164: { type: 'string' }, state: { type: 'string' }, disposition: { type: 'string' }, version: { type: 'integer' }, createdAt: { type: 'string', format: 'date-time' }, endedAt: { type: 'string', format: 'date-time' }, config: { type: 'object' }, roomName: { type: 'string' }, destinationType: { type: 'string' }, destinationId: { type: 'string' } } },
     Event: { type: 'object', properties: { sequenceNumber: { type: 'integer' }, eventType: { type: 'string' }, createdAt: { type: 'string', format: 'date-time' }, payload: { type: 'object', additionalProperties: true } } },
   } },

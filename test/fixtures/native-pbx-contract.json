@@ -1,0 +1,184 @@
+[
+  {
+    "name": "listExtensions",
+    "method": "GET",
+    "path": "/v1/admin/pbx/extensions?iTenantId=7",
+    "status": 200,
+    "response": {
+      "source": "asterisk",
+      "iTenantId": 7,
+      "provisioningEnabled": true,
+      "contexts": ["tenant-seven"],
+      "extensions": [
+        {
+          "id": "100-t7",
+          "extension": "100",
+          "context": "tenant-seven",
+          "callerId": "Front Desk",
+          "transport": "transport-udp",
+          "aors": "100-t7",
+          "applyState": "unknown"
+        }
+      ]
+    }
+  },
+  {
+    "name": "createExtension",
+    "method": "POST",
+    "path": "/v1/admin/pbx/extensions?iTenantId=7",
+    "status": 201,
+    "response": {
+      "extension": "100",
+      "sipUsername": "100-t7",
+      "sipSecret": "fixture-one-time-secret",
+      "applyState": "committed"
+    },
+    "body": {
+      "extension": "100",
+      "displayName": "Front Desk",
+      "context": "tenant-seven",
+      "callerIdNumber": "+19496501147"
+    }
+  },
+  {
+    "name": "deleteExtension",
+    "method": "DELETE",
+    "path": "/v1/admin/pbx/extensions/100?iTenantId=7",
+    "status": 204
+  },
+  {
+    "name": "listQueues",
+    "method": "GET",
+    "path": "/v1/admin/pbx/queues?iTenantId=7",
+    "status": 200,
+    "response": {
+      "source": "asterisk",
+      "iTenantId": 7,
+      "provisioningEnabled": true,
+      "queues": [
+        {
+          "id": "t7.sales",
+          "name": "t7.sales",
+          "strategy": "ringall",
+          "applyState": "unknown",
+          "members": [
+            {
+              "interface": "PJSIP/100-t7",
+              "memberName": "100",
+              "penalty": 3,
+              "paused": true
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "createQueue",
+    "method": "POST",
+    "path": "/v1/admin/pbx/queues?iTenantId=7",
+    "status": 201,
+    "response": {
+      "name": "t7.sales",
+      "strategy": "ringall",
+      "applyState": "committed"
+    },
+    "body": {
+      "name": "sales",
+      "strategy": "ringall"
+    }
+  },
+  {
+    "name": "deleteQueue",
+    "method": "DELETE",
+    "path": "/v1/admin/pbx/queues/t7.sales?iTenantId=7",
+    "status": 204
+  },
+  {
+    "name": "putQueueMember",
+    "method": "PUT",
+    "path": "/v1/admin/pbx/queues/t7.sales/extensions/100?iTenantId=7",
+    "status": 200,
+    "response": {
+      "queue": "t7.sales",
+      "extension": "100",
+      "penalty": 3,
+      "paused": true,
+      "applyState": "committed"
+    },
+    "body": {
+      "penalty": 3,
+      "paused": true,
+      "context": "tenant-seven"
+    }
+  },
+  {
+    "name": "deleteQueueMember",
+    "method": "DELETE",
+    "path": "/v1/admin/pbx/queues/t7.sales/extensions/100?iTenantId=7",
+    "status": 204
+  },
+  {
+    "name": "listDids",
+    "method": "GET",
+    "path": "/v1/admin/pbx/dids?iTenantId=7",
+    "status": 200,
+    "response": {
+      "source": "asterisk",
+      "iTenantId": 7,
+      "provisioningEnabled": true,
+      "dids": [
+        {
+          "did": "+19496501147",
+          "managed": true,
+          "queue": "t7.sales",
+          "ringsBeforeAi": 6,
+          "schedule": {
+            "timeRange": "09:00-17:00",
+            "weekdays": "mon&tue&wed&thu&fri",
+            "timezone": "America/Los_Angeles"
+          },
+          "livekitDestination": "+19496501147",
+          "ringTimeoutSeconds": 30,
+          "applyState": "committed"
+        }
+      ]
+    }
+  },
+  {
+    "name": "putDid",
+    "method": "PUT",
+    "path": "/v1/admin/pbx/dids/%2B19496501147?iTenantId=7",
+    "status": 200,
+    "response": {
+      "did": "+19496501147",
+      "managed": true,
+      "queue": "t7.sales",
+      "ringsBeforeAi": 6,
+      "schedule": {
+        "timeRange": "09:00-17:00",
+        "weekdays": "mon&tue&wed&thu&fri",
+        "timezone": "America/Los_Angeles"
+      },
+      "livekitDestination": "+19496501147",
+      "ringTimeoutSeconds": 30,
+      "applyState": "committed"
+    },
+    "body": {
+      "queue": "t7.sales",
+      "ringsBeforeAi": 6,
+      "schedule": {
+        "timeRange": "09:00-17:00",
+        "weekdays": "mon&tue&wed&thu&fri",
+        "timezone": "America/Los_Angeles"
+      },
+      "livekitDestination": "+19496501147"
+    }
+  },
+  {
+    "name": "deleteDid",
+    "method": "DELETE",
+    "path": "/v1/admin/pbx/dids/%2B19496501147?iTenantId=7",
+    "status": 204
+  }
+]

@@ -136,6 +136,7 @@ export class HttpApi {
     const payload = JSON.stringify(body ?? {});
     res.writeHead(status, {
       'content-type': 'application/json',
+      'cache-control': 'no-store',
       'x-aida-correlation-id': correlationId,
     });
     res.end(payload);

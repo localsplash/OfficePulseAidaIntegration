@@ -7,10 +7,12 @@ import { Readiness } from '../src/readiness.js';
 import { assembleApiRoutes } from '../src/http/apiRoutes.js';
 import { buildRoutes } from '../src/http/routes.js';
 import { pbxInventoryRoutes } from '../src/pbx/inventory.js';
+import { pbxProvisioningRoutes } from '../src/pbx/provisioning.js';
 
 test('OpenAPI covers every canonical application route',()=>{
   const normalize=(path:string)=>path.replace(/:[^/]+|\{[^}]+\}/g,'{}');
-  const routes=assembleApiRoutes(pbxInventoryRoutes({extensions:async()=>[],queues:async()=>[]},new Map(),false),buildRoutes({} as any));
+  const writer={} as any;
+  const routes=assembleApiRoutes([...pbxInventoryRoutes({extensions:async()=>[],queues:async()=>[]},new Map(),false),...pbxProvisioningRoutes(writer,new Map(),true)],buildRoutes({} as any));
   const documented=new Set(Object.entries(openApi.paths).flatMap(([path,methods])=>Object.keys(methods).map(method=>method.toUpperCase()+' '+normalize(path))));
   for(const route of routes)assert.ok(documented.has(route.method+' '+normalize(route.pattern)),route.pattern);
 });

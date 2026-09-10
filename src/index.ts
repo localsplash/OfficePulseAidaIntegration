@@ -16,6 +16,7 @@ import { LiveKitWebhookHandler } from './livekit/webhookHandler.js';
 import { PusherNotifier } from './notify/pusher.js';
 import { RuntimeCallEventSink } from './runtime/callEventSink.js';
 import { mysqlPbxInventory, pbxInventoryRoutes } from './pbx/inventory.js';
+import { MysqlPbxProvisioner, pbxProvisioningRoutes } from './pbx/provisioning.js';
 import { MysqlRuntimeStore } from './runtime/mysqlRuntimeStore.js';
 import { NocoDbReadClient } from './nocodb/api.js';
 import { operationsConfig } from './operations/config.js';
@@ -31,12 +32,15 @@ async function main(): Promise<void> {
   await migrateRuntime(config.runtimeMysql);
   const logger = new Logger({ level: config.logLevel });
   const runtime = new MysqlRuntimeStore(config.runtimeMysql);
-  const inventory = config.pbxInventoryMysql ? mysqlPbxInventory(config.pbxInventoryMysql) : undefined;
+  const inventory = config.pbxInventoryMysql ? mysqlPbxInventory(config.pbxInventoryMysql, true) : undefined;
+  const provisioner = config.pbxProvisioningMysql ? new MysqlPbxProvisioner(config.pbxProvisioningMysql) : undefined;
   const noco = new NocoDbReadClient(config.nocodb);
   const readiness = new Readiness();
   readiness.register('runtime-mysql', 'critical');
   readiness.register('nocodb', 'critical');
   readiness.register('pbx-inventory', 'degraded', false, inventory ? 'Awaiting inventory check' : 'PBX inventory is not configured');
+  readiness.register('pbx-provisioning', 'degraded', false, provisioner ? 'Awaiting provisioning database check' : 'PBX provisioning is disabled');
+  readiness.register('pbx-apply', 'degraded', false, provisioner ? 'Asterisk delegation and effective apply state unknown; mutations report committed only' : 'PBX provisioning is disabled');
   readiness.observe((name, ready, detail) => { void runtime.setDependencyStatus(name, ready, detail).catch(() => {}); });
   readiness.register('ari', config.voiceEnabled ? 'critical' : 'degraded');
   readiness.register('livekit', 'degraded');
@@ -51,7 +55,10 @@ async function main(): Promise<void> {
     defaultMohClass: config.takeover.defaultMohClass, livekitTrunkEndpoint: config.takeover.livekitTrunkEndpoint });
   ari.on('connected', () => { void takeover.reconcile().catch((err) => logger.error('reconciliation failed', { err })); });
   const routes = assembleApiRoutes(
-    pbxInventoryRoutes(inventory?.reader ?? { extensions: async () => [], queues: async () => [] }, config.pbxInventoryScopes, !!inventory),
+    [
+      ...pbxInventoryRoutes(inventory?.reader ?? { extensions: async () => [], queues: async () => [] }, config.pbxInventoryScopes, !!inventory, !!provisioner),
+      ...pbxProvisioningRoutes(provisioner, config.pbxInventoryScopes, !!provisioner),
+    ],
     voiceAvailability(buildRoutes({ runtime, takeover,
       defaultRingTimeoutSeconds: config.takeover.ringTimeoutSeconds,
       webhooks: new LiveKitWebhookHandler({ ...config.livekit, runtime, logger }),
@@ -93,6 +100,10 @@ async function main(): Promise<void> {
         readiness.set('pbx-inventory', true);
       } catch { readiness.set('pbx-inventory', false, 'PBX inventory unavailable; verify connection, schema, grants and tenant scope'); }
     }
+    if (provisioner) {
+      const connected = await provisioner.ping();
+      readiness.set('pbx-provisioning', connected, connected ? 'Provisioning database available; effective Asterisk state is not verified' : 'Provisioning database unavailable');
+    }
   };
   await probe();
   const timer = setInterval(() => { void probe(); }, 30000);
@@ -104,7 +115,7 @@ async function main(): Promise<void> {
     closing = true;
     clearInterval(timer);
     ari.stop();
-    void Promise.allSettled([fastAgi.close(), privateApi.close(), publicApi.close(), operations?.close(), runtime.close(), inventory?.close()]).then(() => process.exit(0));
+    void Promise.allSettled([fastAgi.close(), privateApi.close(), publicApi.close(), operations?.close(), runtime.close(), inventory?.close(), provisioner?.close()]).then(() => process.exit(0));
     setTimeout(() => process.exit(1), 10000).unref();
   };
   process.on('SIGTERM', shutdown);

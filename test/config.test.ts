@@ -111,3 +111,20 @@ test('retired PBX writer credentials and rollback flag are ignored', () => {
   assert.equal('asteriskMysql' in config, false);
   assert.equal('legacyPbxProvisioningEnabled' in config, false);
 });
+
+test('POC provisioning is opt-in and requires its dedicated writer credentials', () => {
+  const config = loadConfig({ ...PROD_ENV, PBX_PROVISIONING_ENABLED: 'true',
+    PBX_PROVISIONING_MYSQL_USER: 'pbx_writer', PBX_PROVISIONING_MYSQL_PASSWORD: 'writer-password' });
+  assert.equal(config.pbxProvisioningMysql?.user, 'pbx_writer');
+  assert.equal(config.pbxProvisioningMysql?.database, 'asterisk');
+  assert.throws(() => loadConfig({ ...PROD_ENV, PBX_PROVISIONING_ENABLED: 'true' }), /PBX_PROVISIONING_MYSQL_USER/);
+  assert.throws(() => loadConfig({ ...PROD_ENV, PBX_PROVISIONING_ENABLED: 'yes' }), /PBX_PROVISIONING_ENABLED/);
+});
+
+test('PBX writer cannot reuse inventory or runtime account names', () => {
+  for (const user of ['aida_runtime', 'inventory_ro']) {
+    assert.throws(() => loadConfig({ ...PROD_ENV, PBX_PROVISIONING_ENABLED: 'true',
+      PBX_PROVISIONING_MYSQL_USER: user, PBX_PROVISIONING_MYSQL_PASSWORD: 'unused',
+      PBX_INVENTORY_ENABLED: 'true', PBX_INVENTORY_MYSQL_USER: 'inventory_ro', PBX_INVENTORY_MYSQL_PASSWORD: 'unused' }), /dedicated account/);
+  }
+});

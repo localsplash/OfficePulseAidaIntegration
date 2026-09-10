@@ -2,9 +2,9 @@
 
 Asterisk/OfficePulse owns PBX configuration. Identity owns users, tenants,
 roles and business-number identity; AidaAdmin owns business and AI profiles.
-OfficePulse reads only scoped service settings from PlatformConfig and native
-PBX endpoint/queue inventory from the vendor database. There is no desired-state
-copy, sync status or ring-group provisioning contract.
+OfficePulse reads scoped service settings and native PBX inventory. Its optional
+POC writer mutates Asterisk Realtime directly; there is no desired-state copy,
+sync status or ring-group provisioning contract.
 
 ## Stores
 
@@ -25,6 +25,8 @@ packaged or applied.
 
 - Private GET `/v1/admin/pbx/extensions?iTenantId=N` and `/v1/admin/pbx/queues?iTenantId=N`
   follow the [inventory contract](PBX_SOURCE_OF_TRUTH.md).
+- Opt-in extension, queue, queue-member and DID mutations under `/v1/admin/pbx`
+  follow the [POC provisioning contract](PBX_PROVISIONING.md).
 - Private GET `/v1/admin/calls/:callSessionId` returns the observed session or 404.
 - Private GET `/v1/admin/calls/:callSessionId/events` returns `{events:[...]}` for an
   call ID. It does not read the PBX CDR table.
@@ -36,7 +38,7 @@ packaged or applied.
   raw body and retains durable event handling. It is the only public application route.
 - `/healthz` and `/readyz` are available on both listeners.
 
-Provisioning routes are removed, and canonical device admission is not registered.
+Legacy `/v1/provisioning` routes are removed, and canonical device admission is not registered.
 With `VOICE_ENABLED=false`, all voice mutations/callbacks return 503 `voice_unavailable`
 and connectors stay stopped. With voice enabled, ARI reconciliation, LiveKit
 callbacks and FastAGI run. FastAGI `/bootstrap` returns FALLBACK without overwriting
@@ -51,7 +53,7 @@ SQL read grants, scope mapping and HTTP trust are separate requirements.
 
 ## Remaining work
 
-Native queue call admission/control, business DID-to-PBX references, authenticated
-operations UI, native CDR/recording access and external PBX acceptance are tracked
+Native queue call admission/control, native CDR/recording access and external
+PBX acceptance are tracked
 in issues #2/#7 and AidaAdmin #29. AidaAgent and AidaHandset implementation remains
 deferred. There is no separate AidaOfficePbxAdmin or AidaControl application.

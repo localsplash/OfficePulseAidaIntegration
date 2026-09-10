@@ -16,6 +16,8 @@ test('inventory mapping is explicit and rejects shared or malformed tenant refer
     JSON.stringify({ 1: scope, 2: { contexts: [], queueNames: ['support-one'] } }),
     JSON.stringify({ 1: { contexts: ['one'], queueNames: ['x;DROP'] } }),
     JSON.stringify({ 1: { contexts: ['one'], queueNames: [], extra: true } }),
+    JSON.stringify({ 1: { contexts: ['one'], queueNames: [], didContext: 'from-bandwidth', didNumbers: ['19496501147'] } }),
+    JSON.stringify({ 1: { contexts: ['one'], queueNames: [], didNumbers: ['+19496501147'] }, 2: { contexts: ['two'], queueNames: [], didNumbers: ['+19496501147'] } }),
   ]) assert.throws(() => parsePbxTenantScopes(value), /PBX_INVENTORY_TENANTS_JSON/);
 });
 
@@ -43,11 +45,11 @@ test('queue inventory reads queue configuration and persists its native member i
   ] }]);
 });
 
-test('empty configured slices do not query all PBX rows; unavailable queues and oversized inventories fail', async () => {
+test('empty configured slices do not query all PBX rows; absent allowlisted queues are empty and oversized inventories fail', async () => {
   const reader = new PbxInventoryReader(async () => { throw new Error('must not query'); });
   assert.deepEqual(await reader.extensions({ contexts: [], queueNames: [] }), []);
   assert.deepEqual(await reader.queues({ contexts: [], queueNames: [] }), []);
-  await assert.rejects(new PbxInventoryReader(async () => []).queues(scope), /unavailable/);
+  assert.deepEqual(await new PbxInventoryReader(async () => []).queues(scope), []);
   await assert.rejects(new PbxInventoryReader(async () => Array(1001).fill({})).extensions(scope), /POC size/);
 });
 
@@ -69,7 +71,7 @@ test('HTTP inventory requires one canonical mapped tenant and fails closed when 
     assert.equal((await fetch(`${base}/v1/admin/pbx/extensions?iTenantId=2`)).status, 503);
     assert.equal(calls, 0);
     const response = await fetch(`${base}/v1/admin/pbx/extensions?iTenantId=1`);
-    assert.deepEqual(await response.json(), { source: 'asterisk', iTenantId: 1, extensions: [] });
+    assert.deepEqual(await response.json(), { source: 'asterisk', iTenantId: 1, provisioningEnabled: false, contexts: scope.contexts, extensions: [] });
     const unavailable = await fetch(`${base}/v1/admin/pbx/queues?iTenantId=1`);
     assert.equal(unavailable.status, 503);
     assert.doesNotMatch(await unavailable.text(), /SQL secret/);
@@ -94,4 +96,21 @@ test('read-only inventory can run before LiveKit voice connectors with a dedicat
   assert.equal(config.pbxInventoryMysql?.host, 'pbx');
   assert.equal(config.pbxInventoryMysql?.user, 'inventory_ro');
   assert.throws(() => loadConfig({ NODE_ENV: 'test', PBX_INVENTORY_ENABLED: 'true' }), /PBX_INVENTORY_MYSQL_USER/);
+});
+
+test('managed queue inventory requires an exact versioned marker, never a native name prefix', async () => {
+  const { queueMarkerExten, queueMarkerData } = await import('../src/pbx/queueOwnership.js');
+  const native = 't9007199254740991.' + 'x'.repeat(60);
+  assert.ok(queueMarkerExten(native).length <= 80);
+  const reader = new PbxInventoryReader(async (sql, values) => {
+    if (sql.includes('FROM extensions')) {
+      assert.deepEqual(values, ['business-one']);
+      return [{ exten: queueMarkerExten(native), priority: 1, app: 'NoOp', appdata: queueMarkerData(native) },
+        { exten: queueMarkerExten('t1.impostor'), priority: 1, app: 'NoOp', appdata: queueMarkerData('other') }];
+    }
+    assert.deepEqual(values, ['support-one', native]);
+    if (sql.includes('FROM queues')) return [{ name: native, strategy: 'ringall' }];
+    return [];
+  }, true);
+  assert.deepEqual(await reader.queues(scope), [{ id: native, name: native, strategy: 'ringall', members: [] }]);
 });

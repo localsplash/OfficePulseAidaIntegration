@@ -2,10 +2,12 @@
 ; Install as /etc/asterisk/extconfig.conf (merge with existing settings).
 ; Requires res_config_mysql (or ODBC equivalents) configured with a
 ; read-only Asterisk-side account; the integration service writes with
-; its own least-privilege account (deploy/sql/grants.sql).
+; its own least-privilege account (deploy/sql/pbx-provisioning-grants.sql).
 
 [settings]
 ps_endpoints => mysql,asterisk,ps_endpoints
 ps_auths => mysql,asterisk,ps_auths
 ps_aors => mysql,asterisk,ps_aors
 extensions => mysql,asterisk,extensions
+queues => mysql,asterisk,queues
+queue_members => mysql,asterisk,queue_members

@@ -80,4 +80,9 @@ test('installation contract maps the six native Realtime families and requires n
   }
   const runbook = await readFile(new URL('../docs/PBX_PROVISIONING.md', import.meta.url), 'utf8');
   for (const requirement of ['include it once', 'Do not install a catch-all Realtime switch', '+19496501147', 'queue show concierge', 'pjsip show endpoint livekit', 'recording', 'Rollback'.toLowerCase()]) assert.ok(runbook.includes(requirement), requirement);
+  const ingress = await readFile(new URL('../asterisk/extensions.conf.managed-did.patch', import.meta.url), 'utf8');
+  assert.match(ingress, /^-exten => \+19496501147,1,NoOp\(Routing Concierge DID/m);
+  assert.match(ingress, /^\+ same => n,Goto\(managed-concierge,\$\{EXTEN\},1\)$/m);
+  assert.match(ingress, /^\+\[managed-concierge\]\n\+switch => Realtime$/m);
+  assert.doesNotMatch(ingress, /^\+switch => Realtime.*from-bandwidth/m);
 });

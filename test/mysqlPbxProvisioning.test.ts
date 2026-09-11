@@ -38,11 +38,26 @@ test('disposable MySQL PBX writer: exact grants, atomicity, ownership and concur
     // Representative Asterisk Realtime shapes; fixtures are never application migrations.
     await setup.query('CREATE TABLE ps_aors (id VARCHAR(80) PRIMARY KEY, max_contacts INT, remove_existing VARCHAR(3)) ENGINE=InnoDB');
     await setup.query('CREATE TABLE ps_auths (id VARCHAR(80) PRIMARY KEY, auth_type VARCHAR(20), username VARCHAR(80), password VARCHAR(80)) ENGINE=InnoDB');
-    await setup.query('CREATE TABLE ps_endpoints (id VARCHAR(80) PRIMARY KEY, transport VARCHAR(40), aors VARCHAR(200), auth VARCHAR(200), outbound_auth VARCHAR(200), context VARCHAR(80), disallow VARCHAR(200), allow VARCHAR(200), callerid VARCHAR(80)) ENGINE=InnoDB');
-    await setup.query('CREATE TABLE extensions (id BIGINT AUTO_INCREMENT PRIMARY KEY, context VARCHAR(80) NOT NULL, exten VARCHAR(80) NOT NULL, priority INT NOT NULL, app VARCHAR(40), appdata VARCHAR(256), UNIQUE KEY route (context, exten, priority)) ENGINE=InnoDB');
+    await setup.query('CREATE TABLE ps_endpoints (id VARCHAR(80) PRIMARY KEY, transport VARCHAR(40), aors VARCHAR(200), auth VARCHAR(200), outbound_auth VARCHAR(200), context VARCHAR(80), disallow VARCHAR(200), allow VARCHAR(200), callerid VARCHAR(40)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci');
+    await setup.query('CREATE TABLE extensions (id BIGINT AUTO_INCREMENT PRIMARY KEY, context VARCHAR(80) NOT NULL, exten VARCHAR(40) NOT NULL, priority INT NOT NULL, app VARCHAR(40), appdata VARCHAR(256), UNIQUE KEY route (context, exten, priority)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci');
     await setup.query('CREATE TABLE queues (name VARCHAR(128) PRIMARY KEY, strategy VARCHAR(20)) ENGINE=InnoDB');
     await setup.query('CREATE TABLE queue_members (uniqueid INT AUTO_INCREMENT PRIMARY KEY, queue_name VARCHAR(80), interface VARCHAR(80), membername VARCHAR(80), state_interface VARCHAR(80), penalty INT, paused INT, UNIQUE KEY member (queue_name, interface)) ENGINE=InnoDB');
     await setup.query('CREATE TABLE unrelated_private_data (secret VARCHAR(80)) ENGINE=InnoDB');
+    const migration = (await readFile(new URL('../deploy/sql/pbx-provisioning-schema.sql', import.meta.url), 'utf8'))
+      .replace(/^--.*$/gm, '')
+      .replaceAll("'asterisk'", `'${database}'`)
+      .replaceAll('asterisk.', `\`${database}\`.`);
+    for (let pass = 0; pass < 2; pass += 1) {
+      for (const statement of migration.split(';').map(s => s.trim()).filter(Boolean)) await setup.query(statement);
+    }
+    const [widened] = await setup.query<mysql.RowDataPacket[]>(
+      "SELECT TABLE_NAME,COLUMN_NAME,CHARACTER_MAXIMUM_LENGTH,IS_NULLABLE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND ((TABLE_NAME='extensions' AND COLUMN_NAME='exten') OR (TABLE_NAME='ps_endpoints' AND COLUMN_NAME='callerid')) ORDER BY TABLE_NAME",
+      [database],
+    );
+    assert.deepEqual(widened.map(row => [row.TABLE_NAME, row.COLUMN_NAME, Number(row.CHARACTER_MAXIMUM_LENGTH), row.IS_NULLABLE]), [
+      ['extensions', 'exten', 80, 'NO'],
+      ['ps_endpoints', 'callerid', 80, 'YES'],
+    ]);
     const script = (await readFile(new URL('../deploy/sql/pbx-provisioning-grants.sql', import.meta.url), 'utf8'))
       .replace(/^--.*$/gm, '').replaceAll("'aida_pbx_provisioner'", `'${user}'`)
       .replaceAll('__OFFICEPULSE_API_IP__', '%').replaceAll('__STRONG_PASSWORD__', password)

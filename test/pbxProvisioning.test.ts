@@ -80,7 +80,7 @@ test('strict input and canonical tenant validation prevent any writer call on in
     for (const query of ['', '?iTenantId=01', '?iTenantId=0', '?iTenantId=-1', '?iTenantId=1&iTenantId=1', '?iTenantId=9007199254740992']) {
       assert.equal((await fetch(`${base}/v1/admin/pbx/extensions${query}`, request('POST', { extension: '1001' }))).status, 422);
     }
-    for (const body of [{ extension: '1' }, { extension: '1001', context: 'tenant-two' }, { extension: '1001', displayName: 'x\nsecret' }, { extension: '1001', callerIdNumber: '1949' }, { extension: '1001', iTenantId: 2 }]) {
+    for (const body of [{ extension: '1' }, { extension: '1001', context: 'tenant-two' }, { extension: '1001', displayName: 'x\nsecret' }, { extension: '1001', displayName: 'x'.repeat(24), callerIdNumber: '+19496501147' }, { extension: '1001', callerIdNumber: '1949' }, { extension: '1001', iTenantId: 2 }]) {
       assert.equal((await fetch(`${base}/v1/admin/pbx/extensions?iTenantId=1`, request('POST', body))).status, 422);
     }
     for (const body of [{ penalty: -1 }, { penalty: null }, { penalty: 101 }, { penalty: 0.5 }, { paused: 'false' }, { context: 'tenant-two' }]) {

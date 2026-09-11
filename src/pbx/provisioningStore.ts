@@ -116,10 +116,13 @@ export class MysqlPbxProvisioner implements PbxProvisioner {
   }
 
   createExtension(input: ExtensionCreate): Promise<{ extension: string; sipUsername: string; sipSecret: string }> {
+    const callerId = input.displayName ? `"${input.displayName}" <${input.callerIdNumber ?? input.extension}>` : (input.callerIdNumber ?? input.extension);
+    if (input.context.length > 40 || input.extension.length > 40 || callerId.length > 40) {
+      return Promise.reject(new ValidationError('Extension values exceed the installed Asterisk 40-character columns'));
+    }
     return this.transaction(async conn => {
       if ((await lockDialplan(conn, input.context, input.extension)).length) throw new ConflictError('The extension already has a dialplan route');
       const secret = randomBytes(32).toString('base64url');
-      const callerId = input.displayName ? `"${input.displayName}" <${input.callerIdNumber ?? input.extension}>` : (input.callerIdNumber ?? input.extension);
       await execute(conn, 'INSERT INTO ps_aors (id, max_contacts, remove_existing) VALUES (?, ?, ?)', [input.endpointId, 1, 'yes']);
       await execute(conn, 'INSERT INTO ps_auths (id, auth_type, username, password) VALUES (?, ?, ?, ?)', [input.endpointId, 'userpass', input.endpointId, secret]);
       await execute(conn, 'INSERT INTO ps_endpoints (id, transport, aors, auth, context, disallow, allow, callerid) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',

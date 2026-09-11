@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type mysql from 'mysql2/promise';
 import { MysqlPbxProvisioner } from '../src/pbx/provisioningStore.js';
-import { ConflictError, DependencyUnavailableError, NotFoundError } from '../src/errors.js';
+import { ConflictError, DependencyUnavailableError, NotFoundError, ValidationError } from '../src/errors.js';
 import { didDialplanRows } from '../src/pbx/managedDid.js';
 
 const config = { host: 'unused', port: 3306, database: 'unused', user: 'unused', password: 'unused' };
@@ -37,6 +37,18 @@ test('writer returns a strong SIP secret only after commit; values never enter p
   assert.equal(insert.values[3], result.sipSecret);
   assert.equal(fake.calls.some(call => call.sql.includes(result.sipSecret) || call.sql.includes("O'Brien")), false);
   assert.deepEqual(fake.status(), { committed: 1, rolledBack: 0, released: 1 });
+});
+
+test('writer refuses values that exceed installed Asterisk columns before opening a transaction', async () => {
+  for (const input of [
+    { extension: '101', endpointId: '101-t1', context: 'c'.repeat(41) },
+    { extension: '101', endpointId: '101-t1', context: 'tenant-one', displayName: 'x'.repeat(25), callerIdNumber: '+19496501147' },
+  ]) {
+    const fake = fakeWriter();
+    await assert.rejects(fake.writer.createExtension(input), ValidationError);
+    assert.equal(fake.calls.length, 0);
+    assert.deepEqual(fake.status(), { committed: 0, rolledBack: 0, released: 0 });
+  }
 });
 
 test('duplicate and commit failures roll back and discard complete upstream SQL and SIP secrets', async () => {

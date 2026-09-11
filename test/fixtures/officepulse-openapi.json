@@ -25,7 +25,9 @@
   "paths": {
     "/healthz": {
       "get": {
-        "tags": ["Health"],
+        "tags": [
+          "Health"
+        ],
         "summary": "Process health",
         "responses": {
           "200": {
@@ -49,7 +51,9 @@
     },
     "/readyz": {
       "get": {
-        "tags": ["Health"],
+        "tags": [
+          "Health"
+        ],
         "summary": "Dependency readiness",
         "description": "HTTP 200 means critical dependencies are ready. Inspect components.pbx-inventory separately. fullyOperational stays false when voice/native admission is unavailable.",
         "responses": {
@@ -78,7 +82,9 @@
     },
     "/v1/admin/pbx/extensions": {
       "get": {
-        "tags": ["Backend API"],
+        "tags": [
+          "Backend API"
+        ],
         "summary": "List native extensions and approved contexts",
         "description": "Private admitted backend network or Identity-authenticated Operations gateway with tenant authorization and mutation CSRF. PBX mutations and DID reads require PBX_PROVISIONING_ENABLED=true plus dedicated writer credentials. Disabled mutation routes are absent. Credentials are returned only by extension creation; responses must not be cached.",
         "x-access-policy": "trusted-backend-network",
@@ -159,7 +165,9 @@
         }
       },
       "post": {
-        "tags": ["Backend API"],
+        "tags": [
+          "Backend API"
+        ],
         "summary": "Create a tenant extension; disclose SIP secret once",
         "description": "Private admitted backend network or Identity-authenticated Operations gateway with tenant authorization and mutation CSRF. PBX mutations and DID reads require PBX_PROVISIONING_ENABLED=true plus dedicated writer credentials. Disabled mutation routes are absent. Credentials are returned only by extension creation; responses must not be cached.",
         "x-access-policy": "trusted-backend-network",
@@ -252,7 +260,9 @@
     },
     "/v1/admin/pbx/extensions/{extension}": {
       "delete": {
-        "tags": ["Backend API"],
+        "tags": [
+          "Backend API"
+        ],
         "summary": "Delete an owned extension bundle and saved queue memberships",
         "description": "Private admitted backend network or Identity-authenticated Operations gateway with tenant authorization and mutation CSRF. PBX mutations and DID reads require PBX_PROVISIONING_ENABLED=true plus dedicated writer credentials. Disabled mutation routes are absent. Credentials are returned only by extension creation; responses must not be cached.",
         "x-access-policy": "trusted-backend-network",
@@ -337,7 +347,9 @@
     },
     "/v1/admin/pbx/queues": {
       "get": {
-        "tags": ["Backend API"],
+        "tags": [
+          "Backend API"
+        ],
         "summary": "List explicitly owned native queues and members",
         "description": "Private admitted backend network or Identity-authenticated Operations gateway with tenant authorization and mutation CSRF. PBX mutations and DID reads require PBX_PROVISIONING_ENABLED=true plus dedicated writer credentials. Disabled mutation routes are absent. Credentials are returned only by extension creation; responses must not be cached.",
         "x-access-policy": "trusted-backend-network",
@@ -418,7 +430,9 @@
         }
       },
       "post": {
-        "tags": ["Backend API"],
+        "tags": [
+          "Backend API"
+        ],
         "summary": "Create a queue from a friendly slug (native ID tN.slug) or approved legacy name",
         "description": "Private admitted backend network or Identity-authenticated Operations gateway with tenant authorization and mutation CSRF. PBX mutations and DID reads require PBX_PROVISIONING_ENABLED=true plus dedicated writer credentials. Disabled mutation routes are absent. Credentials are returned only by extension creation; responses must not be cached.",
         "x-access-policy": "trusted-backend-network",
@@ -511,7 +525,9 @@
     },
     "/v1/admin/pbx/queues/{queue}": {
       "delete": {
-        "tags": ["Backend API"],
+        "tags": [
+          "Backend API"
+        ],
         "summary": "Delete a queue and members; conflict while a DID references it",
         "description": "Private admitted backend network or Identity-authenticated Operations gateway with tenant authorization and mutation CSRF. PBX mutations and DID reads require PBX_PROVISIONING_ENABLED=true plus dedicated writer credentials. Disabled mutation routes are absent. Credentials are returned only by extension creation; responses must not be cached.",
         "x-access-policy": "trusted-backend-network",
@@ -597,7 +613,9 @@
     },
     "/v1/admin/pbx/queues/{queue}/extensions/{extension}": {
       "put": {
-        "tags": ["Backend API"],
+        "tags": [
+          "Backend API"
+        ],
         "summary": "Idempotently set an owned queue member",
         "description": "Private admitted backend network or Identity-authenticated Operations gateway with tenant authorization and mutation CSRF. PBX mutations and DID reads require PBX_PROVISIONING_ENABLED=true plus dedicated writer credentials. Disabled mutation routes are absent. Credentials are returned only by extension creation; responses must not be cached.",
         "x-access-policy": "trusted-backend-network",
@@ -707,7 +725,9 @@
         }
       },
       "delete": {
-        "tags": ["Backend API"],
+        "tags": [
+          "Backend API"
+        ],
         "summary": "Delete one owned saved membership",
         "description": "Private admitted backend network or Identity-authenticated Operations gateway with tenant authorization and mutation CSRF. PBX mutations and DID reads require PBX_PROVISIONING_ENABLED=true plus dedicated writer credentials. Disabled mutation routes are absent. Credentials are returned only by extension creation; responses must not be cached.",
         "x-access-policy": "trusted-backend-network",
@@ -802,7 +822,9 @@
     },
     "/v1/admin/pbx/dids": {
       "get": {
-        "tags": ["Backend API"],
+        "tags": [
+          "Backend API"
+        ],
         "summary": "Read recognized managed routes and explicitly identify manual/unconfigured allowed DIDs",
         "description": "Private admitted backend network or Identity-authenticated Operations gateway with tenant authorization and mutation CSRF. PBX mutations and DID reads require PBX_PROVISIONING_ENABLED=true plus dedicated writer credentials. Disabled mutation routes are absent. Credentials are returned only by extension creation; responses must not be cached.",
         "x-access-policy": "trusted-backend-network",
@@ -885,7 +907,9 @@
     },
     "/v1/admin/pbx/dids/{did}": {
       "put": {
-        "tags": ["Backend API"],
+        "tags": [
+          "Backend API"
+        ],
         "summary": "Set queue hours and ring budget before LiveKit; refuse manual route adoption",
         "description": "Private admitted backend network or Identity-authenticated Operations gateway with tenant authorization and mutation CSRF. PBX mutations and DID reads require PBX_PROVISIONING_ENABLED=true plus dedicated writer credentials. Disabled mutation routes are absent. Credentials are returned only by extension creation; responses must not be cached.",
         "x-access-policy": "trusted-backend-network",
@@ -987,7 +1011,9 @@
         }
       },
       "delete": {
-        "tags": ["Backend API"],
+        "tags": [
+          "Backend API"
+        ],
         "summary": "Delete recognized managed Realtime rows only; retain Identity number assignment",
         "description": "Private admitted backend network or Identity-authenticated Operations gateway with tenant authorization and mutation CSRF. PBX mutations and DID reads require PBX_PROVISIONING_ENABLED=true plus dedicated writer credentials. Disabled mutation routes are absent. Credentials are returned only by extension creation; responses must not be cached.",
         "x-access-policy": "trusted-backend-network",
@@ -1074,7 +1100,9 @@
     },
     "/v1/admin/calls/{id}": {
       "get": {
-        "tags": ["Backend API"],
+        "tags": [
+          "Backend API"
+        ],
         "summary": "Read an observed integration call",
         "description": "Restricted to trusted application backends. A browser session, API key or bearer token does not bypass the network admission policy. AidaAdmin and the operations UI authenticate their human users separately.",
         "x-access-policy": "trusted-backend-network",
@@ -1144,7 +1172,9 @@
     },
     "/v1/admin/calls/{id}/events": {
       "get": {
-        "tags": ["Backend API"],
+        "tags": [
+          "Backend API"
+        ],
         "summary": "Read integration call events",
         "description": "Restricted to trusted application backends. A browser session, API key or bearer token does not bypass the network admission policy. AidaAdmin and the operations UI authenticate their human users separately.",
         "x-access-policy": "trusted-backend-network",
@@ -1222,7 +1252,9 @@
     },
     "/v1/admin/calls/{id}/commands": {
       "post": {
-        "tags": ["Backend API"],
+        "tags": [
+          "Backend API"
+        ],
         "summary": "Submit an integration call command",
         "description": "Restricted to trusted application backends. A browser session, API key or bearer token does not bypass the network admission policy. AidaAdmin and the operations UI authenticate their human users separately. Requires VOICE_ENABLED=true. DRAIN_ACK is supported; TAKEOVER returns 503 until native destination admission exists. Dev returns voice_unavailable before executing commands.",
         "parameters": [
@@ -1242,11 +1274,17 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["commandType", "idempotencyKey"],
+                "required": [
+                  "commandType",
+                  "idempotencyKey"
+                ],
                 "properties": {
                   "commandType": {
                     "type": "string",
-                    "enum": ["DRAIN_ACK", "TAKEOVER"]
+                    "enum": [
+                      "DRAIN_ACK",
+                      "TAKEOVER"
+                    ]
                   },
                   "idempotencyKey": {
                     "type": "string",
@@ -1257,7 +1295,10 @@
                   },
                   "destinationType": {
                     "type": "string",
-                    "enum": ["EXTENSION", "QUEUE"]
+                    "enum": [
+                      "EXTENSION",
+                      "QUEUE"
+                    ]
                   },
                   "destinationId": {
                     "type": "string"
@@ -1349,7 +1390,9 @@
     },
     "/v1/integrations/livekit/webhooks": {
       "post": {
-        "tags": ["Callbacks"],
+        "tags": [
+          "Callbacks"
+        ],
         "summary": "Receive a signed LiveKit webhook",
         "description": "Preserve the original request bytes and LiveKit Authorization header. Signature verification authenticates this callback when voice is enabled. With voice disabled, returns 503.",
         "parameters": [
@@ -1447,7 +1490,10 @@
                 },
                 "criticality": {
                   "type": "string",
-                  "enum": ["critical", "degraded"]
+                  "enum": [
+                    "critical",
+                    "degraded"
+                  ]
                 },
                 "detail": {
                   "type": "string"
@@ -1463,13 +1509,25 @@
       },
       "ApplyState": {
         "type": "string",
-        "enum": ["committed", "active", "unknown"],
+        "enum": [
+          "committed",
+          "active",
+          "unknown"
+        ],
         "description": "This implementation returns committed after a transaction and unknown for native inventory. It does not verify effective Asterisk state or return active."
       },
       "Extension": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "extension", "context", "callerId", "transport", "aors", "applyState"],
+        "required": [
+          "id",
+          "extension",
+          "context",
+          "callerId",
+          "transport",
+          "aors",
+          "applyState"
+        ],
         "properties": {
           "id": {
             "type": "string"
@@ -1495,7 +1553,11 @@
           },
           "applyState": {
             "type": "string",
-            "enum": ["committed", "active", "unknown"],
+            "enum": [
+              "committed",
+              "active",
+              "unknown"
+            ],
             "description": "This implementation returns committed after a transaction and unknown for native inventory. It does not verify effective Asterisk state or return active."
           }
         }
@@ -1503,11 +1565,19 @@
       "ExtensionInventory": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["source", "iTenantId", "provisioningEnabled", "contexts", "extensions"],
+        "required": [
+          "source",
+          "iTenantId",
+          "provisioningEnabled",
+          "contexts",
+          "extensions"
+        ],
         "properties": {
           "source": {
             "type": "string",
-            "enum": ["asterisk"]
+            "enum": [
+              "asterisk"
+            ]
           },
           "iTenantId": {
             "type": "integer"
@@ -1519,8 +1589,8 @@
             "type": "array",
             "items": {
               "type": "string",
-              "pattern": "^[a-zA-Z0-9_.-]{1,80}$",
-              "maxLength": 80
+              "pattern": "^[a-zA-Z0-9_.-]{1,40}$",
+              "maxLength": 40
             }
           },
           "extensions": {
@@ -1534,7 +1604,9 @@
       "ExtensionCreate": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["extension"],
+        "required": [
+          "extension"
+        ],
         "properties": {
           "extension": {
             "type": "string",
@@ -1542,15 +1614,15 @@
           },
           "context": {
             "type": "string",
-            "pattern": "^[a-zA-Z0-9_.-]{1,80}$",
-            "maxLength": 80,
+            "pattern": "^[a-zA-Z0-9_.-]{1,40}$",
+            "maxLength": 40,
             "description": "Required when more than one approved context exists."
           },
           "displayName": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 60,
-            "description": "No quotes, angle brackets, backslashes or control characters."
+            "maxLength": 33,
+            "description": "No quotes, angle brackets, backslashes or control characters. The formatted caller ID must fit the installed 40-character column."
           },
           "callerIdNumber": {
             "type": "string",
@@ -1562,7 +1634,12 @@
       "ExtensionCreated": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["extension", "sipUsername", "sipSecret", "applyState"],
+        "required": [
+          "extension",
+          "sipUsername",
+          "sipSecret",
+          "applyState"
+        ],
         "properties": {
           "extension": {
             "type": "string"
@@ -1576,7 +1653,11 @@
           },
           "applyState": {
             "type": "string",
-            "enum": ["committed", "active", "unknown"],
+            "enum": [
+              "committed",
+              "active",
+              "unknown"
+            ],
             "description": "This implementation returns committed after a transaction and unknown for native inventory. It does not verify effective Asterisk state or return active."
           }
         }
@@ -1584,7 +1665,13 @@
       "Queue": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "name", "strategy", "applyState", "members"],
+        "required": [
+          "id",
+          "name",
+          "strategy",
+          "applyState",
+          "members"
+        ],
         "properties": {
           "id": {
             "type": "string"
@@ -1598,7 +1685,11 @@
           },
           "applyState": {
             "type": "string",
-            "enum": ["committed", "active", "unknown"],
+            "enum": [
+              "committed",
+              "active",
+              "unknown"
+            ],
             "description": "This implementation returns committed after a transaction and unknown for native inventory. It does not verify effective Asterisk state or return active."
           },
           "members": {
@@ -1606,7 +1697,12 @@
             "items": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["interface", "memberName", "penalty", "paused"],
+              "required": [
+                "interface",
+                "memberName",
+                "penalty",
+                "paused"
+              ],
               "properties": {
                 "interface": {
                   "type": "string"
@@ -1629,11 +1725,18 @@
       "QueueInventory": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["source", "iTenantId", "provisioningEnabled", "queues"],
+        "required": [
+          "source",
+          "iTenantId",
+          "provisioningEnabled",
+          "queues"
+        ],
         "properties": {
           "source": {
             "type": "string",
-            "enum": ["asterisk"]
+            "enum": [
+              "asterisk"
+            ]
           },
           "iTenantId": {
             "type": "integer"
@@ -1652,7 +1755,9 @@
       "QueueCreate": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["name"],
+        "required": [
+          "name"
+        ],
         "properties": {
           "name": {
             "type": "string",
@@ -1678,7 +1783,11 @@
       "QueueCreated": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["name", "strategy", "applyState"],
+        "required": [
+          "name",
+          "strategy",
+          "applyState"
+        ],
         "properties": {
           "name": {
             "type": "string"
@@ -1697,7 +1806,11 @@
           },
           "applyState": {
             "type": "string",
-            "enum": ["committed", "active", "unknown"],
+            "enum": [
+              "committed",
+              "active",
+              "unknown"
+            ],
             "description": "This implementation returns committed after a transaction and unknown for native inventory. It does not verify effective Asterisk state or return active."
           }
         }
@@ -1709,8 +1822,8 @@
         "properties": {
           "context": {
             "type": "string",
-            "pattern": "^[a-zA-Z0-9_.-]{1,80}$",
-            "maxLength": 80
+            "pattern": "^[a-zA-Z0-9_.-]{1,40}$",
+            "maxLength": 40
           },
           "penalty": {
             "type": "integer",
@@ -1727,7 +1840,13 @@
       "QueueMemberSaved": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["queue", "extension", "penalty", "paused", "applyState"],
+        "required": [
+          "queue",
+          "extension",
+          "penalty",
+          "paused",
+          "applyState"
+        ],
         "properties": {
           "queue": {
             "type": "string"
@@ -1743,7 +1862,11 @@
           },
           "applyState": {
             "type": "string",
-            "enum": ["committed", "active", "unknown"],
+            "enum": [
+              "committed",
+              "active",
+              "unknown"
+            ],
             "description": "This implementation returns committed after a transaction and unknown for native inventory. It does not verify effective Asterisk state or return active."
           }
         }
@@ -1751,7 +1874,11 @@
       "DidSchedule": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["timeRange", "weekdays", "timezone"],
+        "required": [
+          "timeRange",
+          "weekdays",
+          "timezone"
+        ],
         "properties": {
           "timeRange": {
             "type": "string",
@@ -1775,7 +1902,10 @@
       "DidSettings": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["queue", "ringsBeforeAi"],
+        "required": [
+          "queue",
+          "ringsBeforeAi"
+        ],
         "properties": {
           "queue": {
             "type": "string",
@@ -1820,7 +1950,9 @@
           },
           "managed": {
             "type": "boolean",
-            "enum": [true]
+            "enum": [
+              true
+            ]
           },
           "queue": {
             "type": "string",
@@ -1847,7 +1979,11 @@
           },
           "applyState": {
             "type": "string",
-            "enum": ["committed", "active", "unknown"],
+            "enum": [
+              "committed",
+              "active",
+              "unknown"
+            ],
             "description": "This implementation returns committed after a transaction and unknown for native inventory. It does not verify effective Asterisk state or return active."
           }
         }
@@ -1855,7 +1991,12 @@
       "UnmanagedDid": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["did", "managed", "availability", "applyState"],
+        "required": [
+          "did",
+          "managed",
+          "availability",
+          "applyState"
+        ],
         "properties": {
           "did": {
             "type": "string",
@@ -1864,26 +2005,40 @@
           },
           "managed": {
             "type": "boolean",
-            "enum": [false]
+            "enum": [
+              false
+            ]
           },
           "availability": {
             "type": "string",
-            "enum": ["unconfigured", "manual"]
+            "enum": [
+              "unconfigured",
+              "manual"
+            ]
           },
           "applyState": {
             "type": "string",
-            "enum": ["unknown"]
+            "enum": [
+              "unknown"
+            ]
           }
         }
       },
       "DidInventory": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["source", "iTenantId", "provisioningEnabled", "dids"],
+        "required": [
+          "source",
+          "iTenantId",
+          "provisioningEnabled",
+          "dids"
+        ],
         "properties": {
           "source": {
             "type": "string",
-            "enum": ["asterisk"]
+            "enum": [
+              "asterisk"
+            ]
           },
           "iTenantId": {
             "type": "integer"

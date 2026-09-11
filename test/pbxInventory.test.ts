@@ -15,8 +15,11 @@ test('inventory mapping is explicit and rejects shared or malformed tenant refer
     JSON.stringify({ 1: scope, 2: { contexts: ['BUSINESS-ONE'], queueNames: [] } }),
     JSON.stringify({ 1: scope, 2: { contexts: [], queueNames: ['support-one'] } }),
     JSON.stringify({ 1: { contexts: ['one'], queueNames: ['x;DROP'] } }),
+    JSON.stringify({ 1: { contexts: ['x'.repeat(41)], queueNames: [] } }),
+    JSON.stringify({ 1: { contexts: ['one'], queueNames: ['x'.repeat(81)] } }),
     JSON.stringify({ 1: { contexts: ['one'], queueNames: [], extra: true } }),
     JSON.stringify({ 1: { contexts: ['one'], queueNames: [], didContext: 'from-bandwidth', didNumbers: ['19496501147'] } }),
+    JSON.stringify({ 1: { contexts: ['one'], queueNames: [], didContext: 'x'.repeat(41), didNumbers: ['+19496501147'] } }),
     JSON.stringify({ 1: { contexts: ['one'], queueNames: [], didNumbers: ['+19496501147'] }, 2: { contexts: ['two'], queueNames: [], didNumbers: ['+19496501147'] } }),
   ]) assert.throws(() => parsePbxTenantScopes(value), /PBX_INVENTORY_TENANTS_JSON/);
 });
@@ -101,7 +104,7 @@ test('read-only inventory can run before LiveKit voice connectors with a dedicat
 test('managed queue inventory requires an exact versioned marker, never a native name prefix', async () => {
   const { queueMarkerExten, queueMarkerData } = await import('../src/pbx/queueOwnership.js');
   const native = 't9007199254740991.' + 'x'.repeat(60);
-  assert.ok(queueMarkerExten(native).length <= 80);
+  assert.equal(queueMarkerExten(native).length, 40);
   const reader = new PbxInventoryReader(async (sql, values) => {
     if (sql.includes('FROM extensions')) {
       assert.deepEqual(values, ['business-one']);

@@ -23,8 +23,8 @@ Document and test the required operator-owned setup:
 
 - Map `ps_endpoints`, `ps_auths`, `ps_aors`, `extensions`, `queues`, and `queue_members` through the installed Realtime driver.
 - Include the versioned `extensions_aida.conf` once from the operator-owned `extensions.conf`.
-- Delegate only reviewed tenant and inbound managed contexts to the Realtime dialplan once. Do not install a catch-all Realtime switch in shared/default/trunk contexts.
-- Remove or explicitly redirect static DID entries that would shadow a managed Realtime DID. In particular, the supplied static `+19496501147` route must not coexist as the winning route after that DID becomes managed.
+- Configure the reviewed carrier ingress context once to consult the Realtime `extensions` family. This generic lookup is transport plumbing and must contain no DID-specific destination or delegation.
+- Store every managed DID route in the Realtime `extensions` rows. Remove the supplied static `+19496501147` route after equivalent managed rows exist so the database is the sole source for that DID's handling.
 - Supply a validation/runbook step that proves which source wins for a DID, that the queue exists, and that the LiveKit PJSIP endpoint is available.
 
 The application must not silently claim it performed this installation. Readiness should report provisioning disabled, database unavailable, or Asterisk delegation/apply-state unknown distinctly.
@@ -114,7 +114,7 @@ Use native `GotoIfTime`, `Queue`, `Dial`, and `Hangup`/return behavior in the sh
 - Update public and authenticated OpenAPI documents for every added route and schema.
 - Add a manual least-privilege grant script covering only the required Realtime tables.
 - Update the Realtime mapping template for native queues and members.
-- Document enablement settings, tenant ownership mapping, one-time Asterisk delegation, static-route shadowing, rollback, and the distinction between `committed` and `active`.
+- Document enablement settings, tenant ownership mapping, the one-time generic Realtime ingress lookup, removal of DID-specific static routes, rollback, and the distinction between `committed` and `active`.
 - Document the API contract expected by AidaAdmin, including URL encoding of `+` in DID path segments.
 - Preserve current public-listener isolation: no PBX mutation route may be reachable through the public health/webhook listener.
 
@@ -131,7 +131,7 @@ Before calling the POC operationally complete, record external PBX evidence for 
 3. Route one allowed DID during and outside its schedule.
 4. Verify queue timeout reaches `PJSIP/<destination>@livekit` and a queue answer does not.
 5. Prove an unauthorized tenant cannot read, mutate, or delete the other tenant's objects.
-6. Prove the static route no longer shadows the managed `+19496501147` route.
+6. Prove `+19496501147` resolves from its managed Realtime rows and has no DID-specific static route.
 7. Delete objects and verify there are no orphaned endpoint/auth/AOR/dialplan/member rows.
 
 ## Explicit non-goals

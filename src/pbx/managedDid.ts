@@ -2,6 +2,7 @@ import { ValidationError } from '../errors.js';
 
 export const SECONDS_PER_RING = 5;
 export const NAME_RE = /^[a-zA-Z0-9_.-]{1,80}$/;
+export const CONTEXT_RE = /^[a-zA-Z0-9_.-]{1,40}$/;
 export const E164_RE = /^\+[1-9][0-9]{6,14}$/;
 export const TIME_RANGE_RE = /^(?:[01][0-9]|2[0-3]):[0-5][0-9]-(?:[01][0-9]|2[0-3]):[0-5][0-9]$/;
 const DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
@@ -22,6 +23,10 @@ export function e164(value: unknown, field = 'DID'): string {
 }
 export function name(value: unknown, field: string): string {
   if (typeof value !== 'string' || !NAME_RE.test(value)) throw new ValidationError(`${field} contains unsupported characters`);
+  return value;
+}
+export function contextName(value: unknown, field = 'context'): string {
+  if (typeof value !== 'string' || !CONTEXT_RE.test(value)) throw new ValidationError(`${field} contains unsupported characters`);
   return value;
 }
 export function normalizeWeekdays(value: unknown): string {

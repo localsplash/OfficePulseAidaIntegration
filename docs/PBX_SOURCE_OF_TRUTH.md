@@ -74,6 +74,8 @@ is included in this inventory change.
 
 SQL configuration is not running Asterisk state. Runtime registrations, device status, dynamic membership and queue statistics require Asterisk interfaces such as [PJSIPShowEndpoints](https://docs.asterisk.org/Asterisk_22_Documentation/API_Documentation/AMI_Actions/PJSIPShowEndpoints/) and [QueueStatus](https://docs.asterisk.org/Asterisk_22_Documentation/API_Documentation/AMI_Actions/QueueStatus/). [Sorcery caching](https://docs.asterisk.org/Fundamentals/Asterisk-Configuration/Sorcery/Sorcery-Caching/) also means a database write is not proof that a change is active. Future supported OfficePulse commands must validate effective state without creating an AidaAdmin synchronization workflow.
 
+Managed DID destinations belong in the mapped `asterisk.extensions` table. The carrier ingress context needs one operator-owned generic Realtime lookup so Asterisk consults those rows, but it must not contain DID-specific `Goto` rules or dedicated per-DID contexts. OfficePulse constrains values to the installed 40-character columns and never migrates the vendor schema.
+
 ## Canonical development cleanup and remaining work
 
 The historical extension/ring-group/DID/handset provisioning routes are removed.

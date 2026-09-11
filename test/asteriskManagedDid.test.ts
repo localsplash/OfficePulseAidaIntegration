@@ -73,16 +73,14 @@ test('isolated Asterisk exercises schedule, answer, timeout and unavailable/malf
   }
 });
 
-test('installation contract maps the six native Realtime families and requires narrow operator delegation', async () => {
+test('installation contract maps six native Realtime families and keeps DID routing in data rows', async () => {
   const mapping = await readFile(new URL('../asterisk/extconfig.conf.template', import.meta.url), 'utf8');
   for (const table of ['ps_endpoints', 'ps_auths', 'ps_aors', 'extensions', 'queues', 'queue_members']) {
     assert.ok(mapping.includes(`${table} => mysql,asterisk,${table}`));
   }
   const runbook = await readFile(new URL('../docs/PBX_PROVISIONING.md', import.meta.url), 'utf8');
-  for (const requirement of ['include it once', 'Do not install a catch-all Realtime switch', '+19496501147', 'queue show concierge', 'pjsip show endpoint livekit', 'recording', 'Rollback'.toLowerCase()]) assert.ok(runbook.includes(requirement), requirement);
-  const ingress = await readFile(new URL('../asterisk/extensions.conf.managed-did.patch', import.meta.url), 'utf8');
-  assert.match(ingress, /^-exten => \+19496501147,1,NoOp\(Routing Concierge DID/m);
-  assert.match(ingress, /^\+ same => n,Goto\(managed-concierge,\$\{EXTEN\},1\)$/m);
-  assert.match(ingress, /^\+\[managed-concierge\]\n\+switch => Realtime$/m);
-  assert.doesNotMatch(ingress, /^\+switch => Realtime.*from-bandwidth/m);
+  for (const requirement of ['include it once', 'generic Realtime switch', '+19496501147', 'queue show concierge', 'pjsip show endpoint livekit', 'recording', 'Rollback'.toLowerCase()]) assert.ok(runbook.includes(requirement), requirement);
+  assert.ok(runbook.includes('DID-specific static route'));
+  assert.ok(runbook.includes('"didContext":"from-bandwidth"'));
+  assert.ok(runbook.includes('sole source'));
 });

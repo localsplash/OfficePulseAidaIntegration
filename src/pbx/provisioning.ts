@@ -2,7 +2,7 @@ import { ConflictError, DependencyUnavailableError, NotFoundError, ValidationErr
 import type { Route } from '../http/httpServer.js';
 import type { PbxTenantScope, PbxTenantScopes } from './inventory.js';
 import type { PbxProvisioner } from './provisioningStore.js';
-import { didDialplanRows, e164, managedDid, name, object, parseDidSettings, recognizeDidRows } from './managedDid.js';
+import { contextName, didDialplanRows, e164, managedDid, name, object, parseDidSettings, recognizeDidRows } from './managedDid.js';
 export { MysqlPbxProvisioner, type PbxProvisioner } from './provisioningStore.js';
 export { didDialplanRows, type DidSettings, type DidSchedule, type DialplanRow } from './managedDid.js';
 
@@ -20,7 +20,7 @@ function extension(value: unknown): string {
 }
 function endpointId(ext: string, tenant: number): string { return `${ext}-t${tenant}`; }
 function context(body: Record<string, unknown>, scope: PbxTenantScope): string {
-  const selected = body.context === undefined && scope.contexts.length === 1 ? scope.contexts[0]! : name(body.context, 'context');
+  const selected = body.context === undefined && scope.contexts.length === 1 ? scope.contexts[0]! : contextName(body.context);
   if (!scope.contexts.includes(selected)) throw new ValidationError('context is outside this tenant scope');
   return selected;
 }
@@ -49,9 +49,9 @@ export function pbxProvisioningRoutes(writer: PbxProvisioner | undefined, scopes
       const body = object(req.body, ['extension', 'context', 'displayName', 'callerIdNumber']);
       const ext = extension(body.extension); const ctx = context(body, scope);
       const displayName = body.displayName;
-      if (displayName !== undefined && (typeof displayName !== 'string' || !/^[^"<>\\\x00-\x1f\x7f]{1,60}$/.test(displayName))) throw new ValidationError('displayName contains unsupported characters');
+      if (displayName !== undefined && (typeof displayName !== 'string' || !/^[^"<>\\\x00-\x1f\x7f]{1,33}$/.test(displayName))) throw new ValidationError('displayName contains unsupported characters');
       const callerIdNumber = body.callerIdNumber === undefined ? undefined : e164(body.callerIdNumber, 'callerIdNumber');
-      if (typeof displayName === 'string' && displayName.length + (callerIdNumber ?? ext).length + 5 > 80) throw new ValidationError('displayName and callerIdNumber exceed the native 80-character caller ID limit');
+      if (typeof displayName === 'string' && displayName.length + (callerIdNumber ?? ext).length + 5 > 40) throw new ValidationError('displayName and callerIdNumber exceed the native 40-character caller ID limit');
       const created = await writer.createExtension({ extension: ext, endpointId: endpointId(ext, id), context: ctx, displayName, callerIdNumber });
       return { status: 201, body: { ...created, applyState: 'committed' } };
     } },

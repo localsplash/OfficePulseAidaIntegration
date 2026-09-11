@@ -110,7 +110,7 @@ are loopback upstreams; application clients use the public HTTPS names.
 fixtures. Those tests are not actual OfficePulse MariaDB or live-call evidence.
 
 See [POC PBX provisioning](docs/PBX_PROVISIONING.md) for mutation contracts,
-DID hours/ring/AI behavior, allowlists, the reviewed `officepulse-dev` schema
-migration and ingress patch, Realtime requirements, and apply-state limits.
+DID hours/ring/AI behavior, allowlists, installed-schema limits, table-backed
+Realtime routing requirements, and apply-state limits.
 
 `TEST_PBX_PROVISIONING_MYSQL_URL` validates writer grants and transactional tenant isolation on a disposable `aida_pbx_provisioning_*_test` database. `TEST_ASTERISK_BINARY` exercises the shared DID include in an isolated process without SIP/network modules. Neither test mutates the live PBX.

@@ -31,14 +31,15 @@ export function parsePbxTenantScopes(raw: string | undefined): PbxTenantScopes {
       const values = typed[field];
       if (!Array.isArray(values) || values.length > 100) throw invalid();
       for (const value of values) {
-        if (typeof value !== 'string' || !/^[a-zA-Z0-9_.-]{1,80}$/.test(value)) throw invalid();
+        const limit = field === 'contexts' ? 40 : 80;
+        if (typeof value !== 'string' || value.length > limit || !/^[a-zA-Z0-9_.-]+$/.test(value)) throw invalid();
         const normalized = value.toLowerCase();
         if (owners[field].has(normalized)) throw invalid();
         owners[field].add(normalized);
       }
     }
     const didContext = typed.didContext;
-    if (didContext !== undefined && (typeof didContext !== 'string' || !/^[a-zA-Z0-9_.-]{1,80}$/.test(didContext))) throw invalid();
+    if (didContext !== undefined && (typeof didContext !== 'string' || !/^[a-zA-Z0-9_.-]{1,40}$/.test(didContext))) throw invalid();
     const didNumbers = typed.didNumbers ?? [];
     if (!Array.isArray(didNumbers) || didNumbers.length > 100 || (didNumbers.length > 0 && !didContext)) throw invalid();
     for (const did of didNumbers) {

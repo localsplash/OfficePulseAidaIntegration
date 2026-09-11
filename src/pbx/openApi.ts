@@ -2,6 +2,7 @@ const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
 const json = (schema: unknown) => ({ 'application/json': { schema } });
 const string = { type: 'string' };
 const nativeName = { ...string, pattern: '^[a-zA-Z0-9_.-]{1,80}$', maxLength: 80 };
+const contextName = { ...string, pattern: '^[a-zA-Z0-9_.-]{1,40}$', maxLength: 40 };
 const e164 = { ...string, pattern: '^\\+[1-9][0-9]{6,14}$', example: '+19496501147' };
 const strategies = ['ringall', 'leastrecent', 'fewestcalls', 'random', 'rrmemory', 'linear', 'wrandom'];
 const tenant = { name: 'iTenantId', in: 'query', required: true, description: 'Exactly one canonical Identity tenant ID; duplicate values are rejected.', schema: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER } };
@@ -52,14 +53,14 @@ const inventory = { source: { ...string, enum: ['asterisk'] }, iTenantId: { type
 export const pbxSchemas = {
   ApplyState: applyState,
   Extension: object({ id: string, extension: { ...string, nullable: true }, context: string, callerId: { ...string, nullable: true }, transport: { ...string, nullable: true }, aors: { ...string, nullable: true }, applyState }),
-  ExtensionInventory: object({ ...inventory, contexts: { type: 'array', items: nativeName }, extensions: { type: 'array', items: ref('Extension') } }),
-  ExtensionCreate: object({ extension: { ...string, pattern: '^[0-9]{2,12}$' }, context: { ...nativeName, description: 'Required when more than one approved context exists.' }, displayName: { ...string, minLength: 1, maxLength: 60, description: 'No quotes, angle brackets, backslashes or control characters.' }, callerIdNumber: e164 }, ['extension']),
+  ExtensionInventory: object({ ...inventory, contexts: { type: 'array', items: contextName }, extensions: { type: 'array', items: ref('Extension') } }),
+  ExtensionCreate: object({ extension: { ...string, pattern: '^[0-9]{2,12}$' }, context: { ...contextName, description: 'Required when more than one approved context exists.' }, displayName: { ...string, minLength: 1, maxLength: 33, description: 'No quotes, angle brackets, backslashes or control characters. The formatted caller ID must fit the installed 40-character column.' }, callerIdNumber: e164 }, ['extension']),
   ExtensionCreated: object({ extension: string, sipUsername: string, sipSecret: { ...string, description: 'One-time disclosure. Never logged, cached, persisted by AidaAdmin, or returned by inventory/replays.' }, applyState }),
   Queue: object({ id: string, name: string, strategy: { ...string, nullable: true }, applyState, members: { type: 'array', items: object({ interface: string, memberName: { ...string, nullable: true }, penalty: { type: 'integer' }, paused: { type: 'boolean' } }) } }),
   QueueInventory: object({ ...inventory, queues: { type: 'array', items: ref('Queue') } }),
   QueueCreate: object({ name: { ...nativeName, description: 'Friendly slug up to 60 characters, or exact approved legacy name up to 80. Generated native ID is tN.slug.' }, strategy: { ...string, enum: strategies, default: 'ringall' } }, ['name']),
   QueueCreated: object({ name: string, strategy: { ...string, enum: strategies }, applyState }),
-  QueueMemberInput: object({ context: nativeName, penalty: { type: 'integer', minimum: 0, maximum: 100, default: 0 }, paused: { type: 'boolean', default: false } }, []),
+  QueueMemberInput: object({ context: contextName, penalty: { type: 'integer', minimum: 0, maximum: 100, default: 0 }, paused: { type: 'boolean', default: false } }, []),
   QueueMemberSaved: object({ queue: string, extension: string, penalty: { type: 'integer' }, paused: { type: 'boolean' }, applyState }),
   DidSchedule: object({ timeRange: { ...string, pattern: '^(?:[01][0-9]|2[0-3]):[0-5][0-9]-(?:[01][0-9]|2[0-3]):[0-5][0-9]$', example: '09:00-17:00' }, weekdays: { ...string, maxLength: 128, description: 'Asterisk day names, & separated and optional ranges. Ranges normalize to a unique ordered sun..sat list.', example: 'mon-fri' }, timezone: { ...string, maxLength: 64, description: 'Required valid IANA timezone, including UTC.', example: 'America/Los_Angeles' } }),
   DidSettings: object({ queue: nativeName, ringsBeforeAi: { type: 'integer', minimum: 1, maximum: 12, description: 'Approximately five seconds per ring.' }, schedule: { ...ref('DidSchedule'), nullable: true }, livekitDestination: { ...e164, description: 'Defaults to the DID. The PJSIP provider endpoint is always livekit.' } }, ['queue', 'ringsBeforeAi']),

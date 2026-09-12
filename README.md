@@ -52,7 +52,7 @@ AidaAdmin's extension, ring-group, DID, device or business-profile tables.
 | `PBX_INVENTORY_ENABLED` | false | Enable private vendor configuration reads |
 | `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE` | Explicit production values / port 3306 | External OfficePulse vendor database coordinates |
 | `PBX_INVENTORY_MYSQL_USER`, `PBX_INVENTORY_MYSQL_PASSWORD` | Required when inventory enabled | Dedicated SELECT-only account |
-| `PBX_INVENTORY_TENANTS_JSON` | no mappings | Reviewed tenant context, queue and optional DID allowlists |
+| `PBX_INVENTORY_TENANTS_JSON` | no mappings | Reviewed tenant contexts, queues and managed-DID ingress context; legacy `didNumbers` values are ignored by DID authorization |
 | `PBX_PROVISIONING_ENABLED` | false | Register the POC PBX mutation routes |
 | `PBX_PROVISIONING_MYSQL_USER`, `PBX_PROVISIONING_MYSQL_PASSWORD` | required when enabled | Dedicated Realtime writer account |
 
@@ -110,7 +110,7 @@ are loopback upstreams; application clients use the public HTTPS names.
 fixtures. Those tests are not actual OfficePulse MariaDB or live-call evidence.
 
 See [POC PBX provisioning](docs/PBX_PROVISIONING.md) for mutation contracts,
-DID hours/ring/AI behavior, allowlists, installed-schema limits, table-backed
+DID hours/ring/AI behavior, Identity authorization, installed-schema limits, table-backed
 Realtime routing requirements, and apply-state limits.
 
 `TEST_PBX_PROVISIONING_MYSQL_URL` validates writer grants and transactional tenant isolation on a disposable `aida_pbx_provisioning_*_test` database. `TEST_ASTERISK_BINARY` exercises the shared DID include in an isolated process without SIP/network modules. Neither test mutates the live PBX.

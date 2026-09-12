@@ -121,7 +121,7 @@
   {
     "name": "listDids",
     "method": "GET",
-    "path": "/v1/admin/pbx/dids?iTenantId=7",
+    "path": "/v1/admin/pbx/dids?iTenantId=7&authorizedDid=%2B19496501147",
     "status": 200,
     "response": {
       "source": "asterisk",
@@ -148,7 +148,7 @@
   {
     "name": "putDid",
     "method": "PUT",
-    "path": "/v1/admin/pbx/dids/%2B19496501147?iTenantId=7",
+    "path": "/v1/admin/pbx/dids/%2B19496501147?iTenantId=7&authorizedDid=%2B19496501147",
     "status": 200,
     "response": {
       "did": "+19496501147",
@@ -178,7 +178,7 @@
   {
     "name": "deleteDid",
     "method": "DELETE",
-    "path": "/v1/admin/pbx/dids/%2B19496501147?iTenantId=7",
+    "path": "/v1/admin/pbx/dids/%2B19496501147?iTenantId=7&authorizedDid=%2B19496501147",
     "status": 204
   }
 ]

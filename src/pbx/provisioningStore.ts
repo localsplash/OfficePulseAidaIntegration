@@ -212,7 +212,7 @@ export class MysqlPbxProvisioner implements PbxProvisioner {
 
   async listDids(context: string, dids: readonly string[]): Promise<DidInventory[]> {
     if (!dids.length) return [];
-    if (dids.length > 100) throw new ValidationError('DID inventory exceeds the supported tenant allowlist size');
+    if (dids.length > 100) throw new ValidationError('DID inventory exceeds the supported authorized Number list size');
     try {
       const rows = await read(this.pool,
         `SELECT exten, priority, app, appdata FROM extensions WHERE BINARY context = ? AND BINARY exten IN (${placeholders(dids)}) ORDER BY exten, priority LIMIT 1001`,
@@ -224,7 +224,7 @@ export class MysqlPbxProvisioner implements PbxProvisioner {
 
   setDid(context: string, did: string, queue: string, rows: DialplanRow[], scope: PbxTenantScope): Promise<void> {
     return this.transaction(async conn => {
-      if (context !== scope.didContext || !scope.didNumbers?.includes(did)) throw new ValidationError('DID is outside this tenant\'s allowlist');
+      if (context !== scope.didContext) throw new ValidationError('DID context is outside this tenant scope');
       const settings = recognizeDidRows(did, rows);
       if (!settings || settings.queue !== queue) throw new ValidationError('DID rows are not a recognized managed route');
       await this.ownedQueue(conn, queue, scope);

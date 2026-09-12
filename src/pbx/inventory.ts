@@ -4,7 +4,7 @@ import { ConfigError, DependencyUnavailableError, ValidationError } from '../err
 import type { RuntimeMysqlConfig } from '../runtime/mysqlRuntimeStore.js';
 import type { Route } from '../http/httpServer.js';
 
-export interface PbxTenantScope { contexts: string[]; queueNames: string[]; didContext?: string; didNumbers?: string[] }
+export interface PbxTenantScope { contexts: string[]; queueNames: string[]; didContext?: string }
 export type PbxTenantScopes = ReadonlyMap<string, PbxTenantScope>;
 export interface PbxExtension {
   id: string; context: string; callerId: string | null; transport: string | null; aors: string | null;
@@ -22,7 +22,7 @@ export function parsePbxTenantScopes(raw: string | undefined): PbxTenantScopes {
   try { parsed = JSON.parse(raw); } catch { throw invalid(); }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw invalid();
   const scopes = new Map<string, PbxTenantScope>();
-  const owners = { contexts: new Set<string>(), queueNames: new Set<string>(), didNumbers: new Set<string>() };
+  const owners = { contexts: new Set<string>(), queueNames: new Set<string>() };
   for (const [id, scope] of Object.entries(parsed)) {
     if (!/^[1-9][0-9]*$/.test(id) || !Number.isSafeInteger(Number(id)) || !scope || typeof scope !== 'object' || Array.isArray(scope)) throw invalid();
     const typed = scope as Record<string, unknown>;
@@ -40,14 +40,12 @@ export function parsePbxTenantScopes(raw: string | undefined): PbxTenantScopes {
     }
     const didContext = typed.didContext;
     if (didContext !== undefined && (typeof didContext !== 'string' || !/^[a-zA-Z0-9_.-]{1,40}$/.test(didContext))) throw invalid();
-    const didNumbers = typed.didNumbers ?? [];
-    if (!Array.isArray(didNumbers) || didNumbers.length > 100 || (didNumbers.length > 0 && !didContext)) throw invalid();
-    for (const did of didNumbers) {
-      if (typeof did !== 'string' || !/^\+[1-9][0-9]{6,14}$/.test(did) || owners.didNumbers.has(did)) throw invalid();
-      owners.didNumbers.add(did);
-    }
+    // Accept the retired field during rollout so existing environments still boot,
+    // but discard it: only AidaAdmin's current Identity assertion authorizes DIDs.
+    const legacyDidNumbers = typed.didNumbers;
+    if (legacyDidNumbers !== undefined && (!Array.isArray(legacyDidNumbers) || legacyDidNumbers.length > 100 || legacyDidNumbers.some(did => typeof did !== 'string' || !/^\+[1-9][0-9]{6,14}$/.test(did)))) throw invalid();
     scopes.set(id, { contexts: [...typed.contexts as string[]], queueNames: [...typed.queueNames as string[]],
-      ...(didContext ? { didContext } : {}), didNumbers: [...didNumbers as string[]] });
+      ...(didContext ? { didContext } : {}) });
   }
   return scopes;
 }

@@ -10,6 +10,8 @@ import { ConflictError, NotFoundError } from '../src/errors.js';
 const scopes = parsePbxTenantScopes(JSON.stringify({
   1: { contexts: ['tenant-one'], queueNames: ['concierge'], didContext: 'managed-inbound', didNumbers: ['+19496501147', '+19496501148', '+19496501149'] },
   2: { contexts: ['tenant-two'], queueNames: ['other'], didContext: 'managed-inbound', didNumbers: ['+19496501150'] },
+  3: { contexts: ['tenant-three'], queueNames: ['tenant-three-queue'], didContext: 'managed-inbound' },
+  4: { contexts: ['tenant-four'], queueNames: [] },
 }));
 function fakeWriter(): PbxProvisioner & { calls: { method: string; args: unknown[] }[] } {
   const calls: { method: string; args: unknown[] }[] = [];
@@ -93,6 +95,8 @@ test('strict input and canonical tenant validation prevent any writer call on in
     }
     assert.equal((await fetch(`${base}/v1/admin/pbx/dids/%2B19496501150?iTenantId=1`, request('PUT', valid))).status, 422);
     assert.equal((await fetch(`${base}/v1/admin/pbx/dids/%2B19496501150?iTenantId=1`, request('DELETE'))).status, 404);
+    assert.equal((await fetch(`${base}/v1/admin/pbx/dids?iTenantId=3&authorizedDid=bad`)).status, 422);
+    assert.equal((await fetch(`${base}/v1/admin/pbx/dids?iTenantId=3&authorizedDid=%2B19496501160&authorizedDid=%2B19496501160`)).status, 422);
     assert.equal(writer.calls.length, 0);
   });
 });
@@ -104,14 +108,40 @@ test('DID GET reports recognized, manual and absent routes without exposing arbi
     { did: '+19496501148', rows: [{ priority: 1, app: 'Dial', appdata: 'private-operator-destination' }] },
   ];
   await withApi(writer, async base => {
-    const response = await fetch(`${base}/v1/admin/pbx/dids?iTenantId=1`);
+    const authorized = '&authorizedDid=%2B19496501147&authorizedDid=%2B19496501148&authorizedDid=%2B19496501149';
+    const response = await fetch(`${base}/v1/admin/pbx/dids?iTenantId=1${authorized}`);
     const body = await response.json() as { dids: Record<string, unknown>[] };
     assert.equal(body.dids[0]!.managed, true); assert.equal(body.dids[0]!.applyState, 'committed');
     assert.equal(body.dids[1]!.availability, 'manual'); assert.equal(body.dids[2]!.availability, 'unconfigured');
     assert.doesNotMatch(JSON.stringify(body), /private-operator|sipSecret|appdata/);
-    const saved = await fetch(`${base}/v1/admin/pbx/dids/%2B19496501147?iTenantId=1`, request('PUT', { queue: 'concierge', ringsBeforeAi: 6 }));
+    const saved = await fetch(`${base}/v1/admin/pbx/dids/%2B19496501147?iTenantId=1&authorizedDid=%2B19496501147`, request('PUT', { queue: 'concierge', ringsBeforeAi: 6 }));
     assert.equal(saved.status, 200); assert.equal((await saved.json() as { ringTimeoutSeconds: number }).ringTimeoutSeconds, 30);
     assert.equal(writer.calls[0]!.args[1], '+19496501147');
+  });
+});
+
+test('fresh Identity Numbers can be configured without a static DID allowlist', async () => {
+  const writer = fakeWriter();
+  const did = '+19496501160';
+  await withApi(writer, async base => {
+    const query = '?iTenantId=3&authorizedDid=%2B19496501160';
+    const listed = await fetch(`${base}/v1/admin/pbx/dids${query}`);
+    assert.equal(listed.status, 200);
+    assert.deepEqual((await listed.json() as { dids: unknown[] }).dids, [
+      { did, managed: false, availability: 'unconfigured', applyState: 'unknown' },
+    ]);
+    const saved = await fetch(
+      `${base}/v1/admin/pbx/dids/%2B19496501160${query}`,
+      request('PUT', { queue: 'tenant-three-queue', ringsBeforeAi: 6 }),
+    );
+    assert.equal(saved.status, 200);
+    assert.equal(writer.calls.at(-1)?.method, 'setDid');
+    assert.deepEqual((await (await fetch(`${base}/v1/admin/pbx/dids?iTenantId=1`)).json() as { dids: unknown[] }).dids, []);
+    assert.deepEqual((await (await fetch(`${base}/v1/admin/pbx/dids?iTenantId=4&authorizedDid=%2B19496501161`)).json() as { dids: unknown[] }).dids, []);
+    assert.equal((await fetch(
+      `${base}/v1/admin/pbx/dids/%2B19496501160?iTenantId=3`,
+      request('PUT', { queue: 'tenant-three-queue', ringsBeforeAi: 6 }),
+    )).status, 422);
   });
 });
 
@@ -134,7 +164,8 @@ test('disabled provisioning has no routes and public ingress cannot reach any PB
   const writer = fakeWriter();
   await withApi(writer, async base => {
     for (const route of pbxProvisioningRoutes(writer, scopes, true)) {
-      assert.deepEqual(route.operationsAccess, { scope: 'tenant-query', query: 'iTenantId' });
+      if (route.pattern.includes('/dids')) assert.equal(route.operationsAccess, undefined);
+      else assert.deepEqual(route.operationsAccess, { scope: 'tenant-query', query: 'iTenantId' });
       const path = route.pattern.replace(':extension', '1001').replace(':queue', 'concierge').replace(':did', '%2B19496501147');
       assert.equal((await fetch(`${base}${path}?iTenantId=1`, request(route.method, route.method === 'GET' || route.method === 'DELETE' ? undefined : {}))).status, 403);
     }

@@ -6,6 +6,7 @@ const contextName = { ...string, pattern: '^[a-zA-Z0-9_.-]{1,40}$', maxLength: 4
 const e164 = { ...string, pattern: '^\\+[1-9][0-9]{6,14}$', example: '+19496501147' };
 const strategies = ['ringall', 'leastrecent', 'fewestcalls', 'random', 'rrmemory', 'linear', 'wrandom'];
 const tenant = { name: 'iTenantId', in: 'query', required: true, description: 'Exactly one canonical Identity tenant ID; duplicate values are rejected.', schema: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER } };
+const authorizedDid = { name: 'authorizedDid', in: 'query', required: true, description: 'Repeatable globally unique E.164 Number freshly authorized for this tenant by Identity through the trusted AidaAdmin backend.', schema: e164 };
 const parameter = (name: string, schema: unknown = string) => ({ name, in: 'path', required: true, schema });
 const object = (properties: Record<string, unknown>, required = Object.keys(properties)) => ({ type: 'object', additionalProperties: false, required, properties });
 const applyState = { ...string, enum: ['committed', 'active', 'unknown'], description: 'This implementation returns committed after a transaction and unknown for native inventory. It does not verify effective Asterisk state or return active.' };
@@ -25,9 +26,13 @@ const op = (summary: string, method: string, parameters: unknown[], output?: str
     '422': error('Invalid fields or out-of-scope input'), '503': error('Database, schema, ownership mapping, or provisioning unavailable'),
   },
 });
+const didOp = (summary: string, method: string, parameters: unknown[], output?: string, input?: string) => ({
+  ...op(summary, method, parameters, output, input),
+  description: 'Private admitted backend network. AidaAdmin revalidates Identity tenant access and supplies the current tenant Number assignments. DID routes are excluded from the browser Operations gateway. PBX mutations and DID reads require PBX_PROVISIONING_ENABLED=true plus dedicated writer credentials.',
+});
 const ext = parameter('extension', { ...string, pattern: '^[0-9]{2,12}$' });
 const queue = parameter('queue', nativeName);
-const did = { ...parameter('did', e164), description: 'Exact tenant-allowlisted E.164 DID. URL encode the plus as %2B.' };
+const did = { ...parameter('did', e164), description: 'Exact Identity-assigned E.164 DID. URL encode the plus as %2B.' };
 export const pbxPaths = {
   '/v1/admin/pbx/extensions': {
     get: op('List native extensions and approved contexts', 'get', [], 'ExtensionInventory'),
@@ -43,10 +48,10 @@ export const pbxPaths = {
     put: op('Idempotently set an owned queue member', 'put', [queue, ext], 'QueueMemberSaved', 'QueueMemberInput'),
     delete: op('Delete one owned saved membership', 'delete', [queue, ext]),
   },
-  '/v1/admin/pbx/dids': { get: op('Read recognized managed routes and explicitly identify manual/unconfigured allowed DIDs', 'get', [], 'DidInventory') },
+  '/v1/admin/pbx/dids': { get: didOp('Read recognized managed routes and explicitly identify manual/unconfigured Identity Numbers', 'get', [authorizedDid], 'DidInventory') },
   '/v1/admin/pbx/dids/{did}': {
-    put: op('Set queue hours and ring budget before LiveKit; refuse manual route adoption', 'put', [did], 'ManagedDid', 'DidSettings'),
-    delete: op('Delete recognized managed Realtime rows only; retain Identity number assignment', 'delete', [did]),
+    put: didOp('Set queue hours and ring budget before LiveKit; refuse manual route adoption', 'put', [authorizedDid, did], 'ManagedDid', 'DidSettings'),
+    delete: didOp('Delete recognized managed Realtime rows only; retain Identity number assignment', 'delete', [authorizedDid, did]),
   },
 };
 const inventory = { source: { ...string, enum: ['asterisk'] }, iTenantId: { type: 'integer' }, provisioningEnabled: { type: 'boolean' } };

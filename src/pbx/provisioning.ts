@@ -24,11 +24,22 @@ function context(body: Record<string, unknown>, scope: PbxTenantScope): string {
   if (!scope.contexts.includes(selected)) throw new ValidationError('context is outside this tenant scope');
   return selected;
 }
-function ownedDid(value: unknown, scope: PbxTenantScope, destructive = false): string {
+function authorizedDids(query: URLSearchParams | undefined): string[] {
+  const values = query?.getAll('authorizedDid') ?? [];
+  if (values.length > 100) throw new ValidationError('authorizedDid may contain at most 100 numbers');
+  const unique = new Set<string>();
+  for (const value of values) {
+    const did = e164(value, 'authorizedDid');
+    if (unique.has(did)) throw new ValidationError('authorizedDid values must be unique');
+    unique.add(did);
+  }
+  return [...unique];
+}
+function ownedDid(value: unknown, scope: PbxTenantScope, authorized: readonly string[], destructive = false): string {
   const did = e164(value);
-  if (!scope.didContext || !scope.didNumbers?.includes(did)) {
+  if (!scope.didContext || !authorized.includes(did)) {
     if (destructive) throw new NotFoundError('DID was not found in this tenant');
-    throw new ValidationError('DID is outside this tenant allowlist');
+    throw new ValidationError('DID is not assigned to this tenant in Identity');
   }
   return did;
 }
@@ -83,24 +94,25 @@ export function pbxProvisioningRoutes(writer: PbxProvisioner | undefined, scopes
       const { id, scope } = tenantScope(req.query, scopes); const ext = extension(req.params.extension);
       await writer.deleteQueueMember(name(req.params.queue, 'queue'), ext, endpointId(ext, id), scope); return { status: 204 };
     } },
-    { method: 'GET', pattern: '/v1/admin/pbx/dids', operationsAccess: access, handler: async req => {
+    { method: 'GET', pattern: '/v1/admin/pbx/dids', handler: async req => {
       const { id, scope } = tenantScope(req.query, scopes);
-      const found = scope.didContext ? await writer.listDids(scope.didContext, scope.didNumbers ?? []) : [];
-      const dids = (scope.didNumbers ?? []).map(did => {
+      const authorized = authorizedDids(req.query);
+      const found = scope.didContext ? await writer.listDids(scope.didContext, authorized) : [];
+      const dids = scope.didContext ? authorized.map(did => {
         const rows = found.find(item => item.did === did)?.rows ?? [];
         const settings = recognizeDidRows(did, rows);
         return settings ? managedDid(did, settings) : { did, managed: false, availability: rows.length ? 'manual' : 'unconfigured', applyState: 'unknown' };
-      });
+      }) : [];
       return { status: 200, body: { source: 'asterisk', iTenantId: id, provisioningEnabled: true, dids } };
     } },
-    { method: 'PUT', pattern: '/v1/admin/pbx/dids/:did', operationsAccess: access, handler: async req => {
-      const { scope } = tenantScope(req.query, scopes); const did = ownedDid(req.params.did, scope);
+    { method: 'PUT', pattern: '/v1/admin/pbx/dids/:did', handler: async req => {
+      const { scope } = tenantScope(req.query, scopes); const did = ownedDid(req.params.did, scope, authorizedDids(req.query));
       const settings = parseDidSettings(req.body);
       await writer.setDid(scope.didContext!, did, settings.queue, didDialplanRows(did, settings), scope);
       return { status: 200, body: managedDid(did, settings) };
     } },
-    { method: 'DELETE', pattern: '/v1/admin/pbx/dids/:did', operationsAccess: access, handler: async req => {
-      const { scope } = tenantScope(req.query, scopes); const did = ownedDid(req.params.did, scope, true);
+    { method: 'DELETE', pattern: '/v1/admin/pbx/dids/:did', handler: async req => {
+      const { scope } = tenantScope(req.query, scopes); const did = ownedDid(req.params.did, scope, authorizedDids(req.query), true);
       await writer.deleteDid(scope.didContext!, did); return { status: 204 };
     } },
   ];

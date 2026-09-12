@@ -9,7 +9,7 @@ Coordinate the public contract with the companion AidaAdmin implementation brief
 ## Required architectural decisions
 
 - Register mutations only when an explicit `PBX_PROVISIONING_ENABLED=true` setting and dedicated writer credentials are present. Disabled means the mutation routes are absent, not present-but-permissive.
-- Keep the existing private network admission and authenticated Operations gateway. Every route must declare tenant-query authorization through canonical Identity `iTenantId`; never accept a tenant from an unverified forwarded header.
+- Keep the existing private network admission. Extension and queue routes may use the authenticated Operations gateway. DID routes accept current Identity assignments only from the trusted AidaAdmin backend and must not be exposed through the browser gateway; never accept a tenant from an unverified forwarded header.
 - Use a dedicated least-privilege MySQL account. Do not reuse the runtime migration account or inventory read account, perform DDL at application startup, or grant access to unrelated Asterisk tables.
 - Write Asterisk Realtime tables directly and transactionally. The API must never edit `extensions.conf` or another `/etc/asterisk` file at runtime.
 - Put shared call behavior in a version-controlled Asterisk dialplan subroutine in `asterisk/extensions_aida.conf`. Realtime DID rows should supply validated arguments and invoke the shared subroutine instead of duplicating branching logic for every DID.
@@ -32,7 +32,7 @@ The application must not silently claim it performed this installation. Readines
 ## Tenant ownership model
 
 - Continue treating tenant-to-PBX references as authorization metadata, not desired state.
-- Existing imported contexts, queue names, and DIDs require explicit operator-approved ownership mapping. Extend the current tenant scope format with a managed inbound context and exact E.164 DID allowlist. Reject duplicate DID ownership across tenants.
+- Existing imported contexts and queue names require explicit operator-approved ownership mapping. Extend the tenant scope with a managed inbound context. Use Identity's globally unique Number assignment for DID authorization instead of copying E.164 values into environment configuration.
 - API-created endpoint IDs and queue IDs must be deterministic and tenant-namespaced so tenants may reuse extension numbers and friendly queue names safely. Keep the dialable extension inside its tenant context; never use a global extension-number lookup for authorization.
 - Permit mapped legacy native names such as `concierge`, but never infer ownership of an arbitrary pre-existing queue merely from a prefix.
 - All destructive operations must first resolve and lock the owned native object. A tenant must receive the same not-found response for absent and other-tenant objects.
@@ -73,7 +73,7 @@ Inventory must treat an authorized but not-yet-created/deleted queue as a normal
 ### Managed DIDs
 
 - `GET /v1/admin/pbx/dids?iTenantId=N`
-  - Return only managed/recognized DID routes with normalized settings and apply state. Do not attempt to parse arbitrary operator-authored dialplan into a managed DTO; identify unmanaged allowed DIDs explicitly.
+  - Return only managed/recognized DID routes with normalized settings and apply state. Do not attempt to parse arbitrary operator-authored dialplan into a managed DTO; identify unmanaged Identity-authorized DIDs explicitly.
 - `PUT /v1/admin/pbx/dids/:e164?iTenantId=N`
   - Input contract:
     - `queue`: an existing owned native queue.
@@ -81,7 +81,7 @@ Inventory must treat an authorized but not-yet-created/deleted queue as a normal
     - optional `schedule` containing `timeRange` (`HH:MM-HH:MM`), Asterisk-compatible normalized weekdays (for example `mon-fri`), and an IANA timezone.
     - optional E.164 `livekitDestination`, defaulting to the DID itself.
   - There is no provider field. Compile the destination as `PJSIP/<destination>@livekit`.
-  - Reject a DID outside the tenant's exact allowlist and reject a missing/cross-tenant queue before replacing any rows.
+  - Reject a DID outside the tenant's current Identity assignments and reject a missing/cross-tenant queue before replacing any rows.
   - Replace all managed rows for the DID transactionally; never partially update a route.
 - `DELETE /v1/admin/pbx/dids/:e164?iTenantId=N`
   - Delete only the recognized managed Realtime rows for that owned DID. Refuse to delete an unrecognized/manual dialplan route.

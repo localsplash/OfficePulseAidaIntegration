@@ -14,12 +14,12 @@ Authorization metadata is configured by an operator:
 
 ```json
 {
-  "2": {"contexts":["localsplash"],"queueNames":["localsplash"],"didContext":"from-bandwidth","didNumbers":["+17145550100"]},
-  "3": {"contexts":["concierge"],"queueNames":["concierge"],"didContext":"from-bandwidth","didNumbers":["+19496501147"]}
+  "2": {"contexts":["localsplash"],"queueNames":["localsplash"],"didContext":"from-bandwidth"},
+  "3": {"contexts":["concierge"],"queueNames":["concierge"],"didContext":"from-bandwidth"}
 }
 ```
 
-Save the reviewed map in `PBX_INVENTORY_TENANTS_JSON`. These example numbers do not assign carrier service. Exact DID ownership cannot be duplicated across tenants; contexts and legacy queue names cannot overlap even by case. Imported objects require explicit mapping. Never use a shared/default endpoint context as a tenant boundary.
+Save the reviewed map in `PBX_INVENTORY_TENANTS_JSON`. Identity owns the globally unique E.164 assignment and AidaAdmin supplies its freshly authorized Numbers as repeatable `authorizedDid` query parameters. Adding a Number therefore requires no OfficePulse environment change. The parser temporarily accepts the old optional `didNumbers` field for rollout compatibility, but DID endpoints ignore it and it grants no authorization. Contexts and legacy queue names cannot overlap even by case. Imported objects require explicit mapping. Never use a shared/default endpoint context as a tenant boundary.
 
 Created endpoint/auth/AOR IDs are `<extension>-t<iTenantId>`; dialable numbers stay in the approved tenant context. Created queue IDs are `t<iTenantId>.<slug>` (friendly slug at most 60 characters), except exact mapped legacy names such as `concierge`. Prefixes alone never authorize a pre-existing queue. Creation stores an exact versioned ownership marker in the first tenant context: extension `__aida_queue_` plus the first 27 hex characters of SHA-256(native queue ID), priority 1, `NoOp(OfficePulse:queue:v1:<native queue ID>)`. The complete marker is 40 characters and contains ownership only, not a copied queue configuration.
 
@@ -27,7 +27,7 @@ Imported endpoints remain visible. Extension mutations and mapping edits operate
 
 ## Private contract
 
-Every route requires exactly one positive safe-integer `iTenantId`. Private CIDR admission remains mandatory; the authenticated Operations gateway also applies Identity tenant authorization and CSRF. No route is exposed by the public health/webhook listener. Use the published `/openapi.json` or authenticated `/ops/openapi.json` for full schemas.
+Every route requires exactly one positive safe-integer `iTenantId`. Private CIDR admission remains mandatory. Extension and queue routes are also available through the authenticated Operations gateway with Identity tenant authorization and CSRF. DID routes accept a trusted Identity assertion from the AidaAdmin backend and are not exposed through that browser gateway. No route is exposed by the public health/webhook listener. Use the published `/openapi.json` for the full schema.
 
 | Method | Path under `/v1/admin/pbx` | Result |
 | --- | --- | --- |
@@ -38,8 +38,8 @@ Every route requires exactly one positive safe-integer `iTenantId`. Private CIDR
 | DELETE | `/queues/:queue` | Delete queue/members; 409 while referenced by a DID |
 | PUT | `/queues/:queue/extensions/:extension` | Idempotent `{penalty?:0..100,paused?:boolean,context?}` |
 | DELETE | `/queues/:queue/extensions/:extension` | Delete owned saved membership; absent returns 404 |
-| GET | `/dids` | Recognized managed settings or explicit `manual` / `unconfigured` entries for allowed DIDs |
-| PUT | `/dids/:did` | Set managed route or create an unconfigured allowed route; refuse manual adoption |
+| GET | `/dids` | Recognized managed settings or explicit `manual` / `unconfigured` entries for Identity-authorized DIDs |
+| PUT | `/dids/:did` | Set an Identity-authorized managed route or create an unconfigured route; refuse manual adoption |
 | DELETE | `/dids/:did` | Delete recognized managed rows only; retain Identity/carrier number |
 
 Encode all path components, especially `+19496501147` as `%2B19496501147`. Bodies reject unknown fields. Extension numbers are 2–12 digits; caller-ID numbers must be E.164. Contexts fit the installed 40-character columns. Display names are at most 33 characters without controls, quotes, angle brackets or backslashes, and the complete formatted caller ID must fit the installed 40-character column. Transport/codec POC defaults are `transport-udp` and `ulaw,alaw`. SIP secrets are generated with 32 random bytes and returned only after commit. Duplicate requests return conflict and cannot retrieve a previous secret. Responses are `Cache-Control: no-store`.
@@ -66,7 +66,7 @@ The application does not perform this installation or claim it was completed:
 1. Review and merge `asterisk/extconfig.conf.template`: map `ps_endpoints`, `ps_auths`, `ps_aors`, `extensions`, `queues`, and `queue_members` through the installed driver. Configure PJSIP Sorcery Realtime sources as required by the installed Asterisk version. Verify all tables and grants using separate least-privilege Asterisk and integration accounts.
 2. Install versioned `asterisk/extensions_aida.conf` once and include it once from operator-owned `extensions.conf`. Confirm the `aida-managed-did-v1` context and `GotoIfTime`, `Queue`, `Dial`, `Gosub`, `REGEX`, `DIALPLAN_EXISTS`, `STAT`, and CDR functions are available. Keep timezone data installed under `/usr/share/zoneinfo`.
 3. Configure the existing `[from-bandwidth]` ingress context to consult the mapped `extensions` Realtime family once. This generic Realtime switch is transport plumbing; it must contain no DID-specific destinations. Move managed DID routes out of static configuration so each DID's exact destination, queue, schedule and fallback live only in `asterisk.extensions`. Do not add a dedicated context or `Goto` exception for an individual DID.
-4. Extend tenant 3 in `PBX_INVENTORY_TENANTS_JSON` with `"didContext":"from-bandwidth","didNumbers":["+19496501147"]`, preserving its existing `contexts` and `queueNames`. Exact DID ownership must be present before enabling writes. Remove the old DID-specific static route only after its equivalent managed rows exist in `asterisk.extensions`; the database rows then remain the sole source for that DID's handling.
+4. Extend tenant 3 in `PBX_INVENTORY_TENANTS_JSON` with `"didContext":"from-bandwidth"`, preserving its existing `contexts` and `queueNames`. Create the globally unique Number assignment in Identity through AidaAdmin; AidaAdmin authorizes it dynamically when reading or writing the route. Remove the old DID-specific static route only after its equivalent managed rows exist in `asterisk.extensions`; the database rows then remain the sole source for that DID's handling.
 5. Preserve recording through an operator-owned `officepulse-recording` subroutine. Adapt the existing tenant recording routines using a reviewed exact DID mapping, set `__OFFICEPULSE_RECORDING_STARTED=1`, and return. The managed include skips this hook when that flag, `MIXMONITOR_FILENAME`, or `CDR(userfield)` already identifies a recording. Existing Concierge/LocalSplash hooks differ; verify recording start and CDR association for each tenant before cutover.
 6. Use the operator's scoped validation/reload/cache-expiry procedure. The API does not issue reload commands. After reload, `dialplan show +19496501147@from-bandwidth` must resolve from Realtime without any DID-specific static `Goto` or destination. Inspect that DID's three managed rows, `queue show concierge`, and `pjsip show endpoint livekit`. Trace a controlled call through the versioned subroutine; configuration listings alone cannot prove the winning route or a successful call.
 

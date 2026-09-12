@@ -20,8 +20,11 @@ test('inventory mapping is explicit and rejects shared or malformed tenant refer
     JSON.stringify({ 1: { contexts: ['one'], queueNames: [], extra: true } }),
     JSON.stringify({ 1: { contexts: ['one'], queueNames: [], didContext: 'from-bandwidth', didNumbers: ['19496501147'] } }),
     JSON.stringify({ 1: { contexts: ['one'], queueNames: [], didContext: 'x'.repeat(41), didNumbers: ['+19496501147'] } }),
-    JSON.stringify({ 1: { contexts: ['one'], queueNames: [], didNumbers: ['+19496501147'] }, 2: { contexts: ['two'], queueNames: [], didNumbers: ['+19496501147'] } }),
   ]) assert.throws(() => parsePbxTenantScopes(value), /PBX_INVENTORY_TENANTS_JSON/);
+  assert.deepEqual(
+    parsePbxTenantScopes(JSON.stringify({ 1: { contexts: ['one'], queueNames: [], didContext: 'inbound', didNumbers: ['+19496501147'] } })).get('1'),
+    { contexts: ['one'], queueNames: [], didContext: 'inbound' },
+  );
 });
 
 test('endpoint inventory selects only nonsecret columns with exact scoped SQL parameters', async () => {

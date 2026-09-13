@@ -55,14 +55,14 @@ export class LiveKitWebhookHandler {
     const rawParticipant = object(event.participant);
     const sid = text(rawParticipant?.sid);
     const identity = text(rawParticipant?.identity);
-    const kind = text(rawParticipant?.kind) ?? 'standard';
+    const kind = rawParticipant?.kind === 3 ? 'SIP' : rawParticipant?.kind === 4 ? 'AGENT' : text(rawParticipant?.kind) ?? 'standard';
     if ((sid?.length ?? 0) > 80 || (identity?.length ?? 0) > 120 || kind.length > 20) {
       return { accepted: false, reason: 'invalid participant fields' };
     }
     const delivery: LiveKitWebhookUpdate = {
       deliveryId, eventType, callSessionId, roomName,
       ...(sid ? { participant: { sid, identity, kind,
-        isAgent: kind.toUpperCase() === 'AGENT' || (identity ?? '').startsWith('agent-') } } : {}),
+        isAgent: kind.toUpperCase() === 'AGENT' } } : {}),
     };
     if (!this.opts.runtime.applyLiveKitWebhook) {
       throw new Error('Runtime store must support atomic LiveKit webhook processing');

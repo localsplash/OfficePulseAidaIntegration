@@ -46,11 +46,12 @@ test('MySQL commits LiveKit receipt, participant, agent and event atomically', {
       const outcomes = await Promise.all(Array.from({ length: 6 }, () => runtime.applyLiveKitWebhook(delivery)));
       assert.equal(outcomes.filter(outcome => outcome === 'applied').length, 1);
       assert.equal(outcomes.filter(outcome => outcome === 'duplicate').length, 5);
-      assert.equal((await runtime.getCallSession(callId))?.agentParticipantSid, 'PA_original');
-      assert.equal((await runtime.getCallSession(callId))?.version, 2);
+      assert.equal((await runtime.getCallSession(callId))?.agentParticipantSid, undefined);
+      assert.equal((await runtime.getCallSession(callId))?.version, 1);
       assert.deepEqual((await runtime.listCallEvents(callId)).map(event => event.sequenceNumber), [1]);
     });
     await t.test('departure of an old agent cannot clear a replacement; current departure clears it', async () => {
+      await runtime.updateCallSession(callId, { agentParticipantSid: 'PA_new' }); // bootstrap-authorized binding
       await runtime.applyLiveKitWebhook({ ...delivery, deliveryId: randomUUID(),
         participant: { sid: 'PA_new', identity: 'agent-new', kind: 'AGENT', isAgent: true } });
       await runtime.applyLiveKitWebhook({ ...delivery, deliveryId: randomUUID(), eventType: 'participant_left' });

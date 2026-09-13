@@ -279,6 +279,7 @@ test('a caller with no SIP destination is released to the dialplan fallback', as
   await tick();
   // Congestion hands the call back to the dialplan, which still has the
   // local fallback path — the caller is never simply dropped.
-  assert.deepEqual(ari.hangups, [{ channelId: caller.id, reason: 'congestion' }]);
+  assert.deepEqual(ari.hangups, []);
+  assert.deepEqual(ari.continued, [{ channelId: caller.id, context: 'aida-post-bootstrap', exten: 's' }]);
   assert.equal(ari.originates.length, 0);
 });

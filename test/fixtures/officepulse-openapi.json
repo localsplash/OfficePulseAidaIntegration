@@ -23,6 +23,188 @@
     }
   ],
   "paths": {
+    "/v1/agent/calls/{callSessionId}/bootstrap": {
+      "post": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Consume one-time call bootstrap credentials",
+        "description": "Bootstrap v1. Requires native admission enabled. Verifies the intended dispatch and SIP identity/SID with LiveKit, checks current tenant/profile authorization, and atomically consumes both credentials. Always no-store; never retry an ambiguous response.",
+        "x-access-policy": "one-time-call-credentials",
+        "parameters": [
+          {
+            "name": "callSessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Authorization",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Bearer bootstrapToken from dispatch metadata. Not a staff credential."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "roomName",
+                  "sipParticipantIdentity",
+                  "sipParticipantSid",
+                  "routeToken"
+                ],
+                "properties": {
+                  "roomName": {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  "sipParticipantIdentity": {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  "sipParticipantSid": {
+                    "type": "string",
+                    "maxLength": 80
+                  },
+                  "routeToken": {
+                    "type": "string",
+                    "maxLength": 256,
+                    "minLength": 43,
+                    "pattern": "^[A-Za-z0-9_-]+$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authorized immutable profile; credentials consumed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "callSessionId",
+                    "roomName",
+                    "sipParticipantIdentity",
+                    "sipParticipantSid",
+                    "profileSnapshot"
+                  ],
+                  "properties": {
+                    "callSessionId": {
+                      "type": "string",
+                      "maxLength": 36
+                    },
+                    "roomName": {
+                      "type": "string",
+                      "maxLength": 120
+                    },
+                    "sipParticipantIdentity": {
+                      "type": "string",
+                      "maxLength": 120
+                    },
+                    "sipParticipantSid": {
+                      "type": "string",
+                      "maxLength": 80
+                    },
+                    "profileSnapshot": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "schemaVersion",
+                        "callSessionId",
+                        "tenantId",
+                        "businessName",
+                        "prompt",
+                        "locale",
+                        "didE164"
+                      ],
+                      "properties": {
+                        "schemaVersion": {
+                          "type": "integer",
+                          "enum": [
+                            1
+                          ]
+                        },
+                        "callSessionId": {
+                          "type": "string",
+                          "maxLength": 36
+                        },
+                        "tenantId": {
+                          "type": "string",
+                          "pattern": "^[1-9][0-9]*$"
+                        },
+                        "businessName": {
+                          "type": "string",
+                          "maxLength": 256
+                        },
+                        "prompt": {
+                          "type": "string",
+                          "maxLength": 12000
+                        },
+                        "locale": {
+                          "type": "string",
+                          "enum": [
+                            "en-US"
+                          ]
+                        },
+                        "didE164": {
+                          "type": "string",
+                          "maxLength": 16,
+                          "pattern": "^\\+[1-9][0-9]{6,14}$"
+                        },
+                        "tone": {
+                          "type": "string",
+                          "maxLength": 256
+                        },
+                        "objective": {
+                          "type": "string",
+                          "maxLength": 2048
+                        },
+                        "openingStatement": {
+                          "type": "string",
+                          "maxLength": 2048
+                        },
+                        "transferStatement": {
+                          "type": "string",
+                          "maxLength": 2048
+                        },
+                        "failedTransferStatement": {
+                          "type": "string",
+                          "maxLength": 2048
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_request"
+          },
+          "401": {
+            "description": "credential_rejected"
+          },
+          "503": {
+            "description": "authority_unavailable"
+          }
+        }
+      }
+    },
     "/healthz": {
       "get": {
         "tags": [

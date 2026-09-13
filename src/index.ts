@@ -1,3 +1,10 @@
+import { digest, sameHash } from './agent/contract.js';
+import { agentConfig } from './agent/config.js';
+import { MysqlAdmissionStore } from './agent/store.js';
+import { mysqlNativeAuthority, identityTenantEnabled } from './agent/native.js';
+import { BootstrapAuthority } from './agent/authority.js';
+import { AgentMonitor } from './agent/monitor.js';
+import { NativeCallOrchestrator } from './agent/orchestrator.js';
 import { loadConfig } from './config.js';
 import { platformEnvironment } from './platform/settings.js';
 import { migrateRuntime } from './runtime/migrate.js';
@@ -29,6 +36,7 @@ async function main(): Promise<void> {
   const environment = await platformEnvironment();
   const config = loadConfig(environment);
   const opsConfig = operationsConfig(environment);
+  const agent = agentConfig(environment);
   await migrateRuntime(config.runtimeMysql);
   const logger = new Logger({ level: config.logLevel });
   const runtime = new MysqlRuntimeStore(config.runtimeMysql);
@@ -50,12 +58,41 @@ async function main(): Promise<void> {
   if (notifier) readiness.register('pusher', 'degraded');
   const ari = new AriClient({ ...config.ari, logger: logger.child({ component: 'ari' }),
     onConnectionState: (connected) => readiness.set('ari', connected) });
+  const admissions = agent ? new MysqlAdmissionStore(config.runtimeMysql) : undefined;
+  const native = agent ? mysqlNativeAuthority(config.pbxInventoryMysql!, { scopes: config.pbxInventoryScopes, noco,
+    tenantEnabled: identityTenantEnabled(agent.identityOrigin), profileIds: agent.profileIds }) : undefined;
+  const authority = agent && admissions && native ? new BootstrapAuthority({ store: admissions, runtime,
+    native: native.authority, livekit, routeAttribute: agent.routeAttribute, instanceId: config.officePulseInstanceId }) : undefined;
+  let monitor: AgentMonitor | undefined;
   const takeover = new TakeoverManager({ ari, events: new RuntimeCallEventSink(runtime, logger, livekit), logger,
     drainTimeoutMs: config.takeover.drainTimeoutMs, defaultRingTimeoutSeconds: config.takeover.ringTimeoutSeconds,
-    defaultMohClass: config.takeover.defaultMohClass, livekitTrunkEndpoint: config.takeover.livekitTrunkEndpoint });
+    defaultMohClass: config.takeover.defaultMohClass, livekitTrunkEndpoint: config.takeover.livekitTrunkEndpoint,
+    ...(admissions ? { nativeAdmission: {
+      validate: async (id: string, linkedId: string | undefined, routeToken: string | undefined) => {
+        const a = await admissions.get(id);
+        // A process restart invalidates unfinished monitoring; the caller returns locally.
+        return !!a && !!monitor?.isMonitoring(id) && a.status === 'dispatched' && a.expiresAt > Date.now() && a.linkedId === linkedId && !!routeToken && sameHash(a.routeHash, digest(routeToken));
+      },
+      failed: async (id: string) => { await admissions.transition(id, 'fallback', 'agent-fallback'); },
+      ended: async (id: string) => { await admissions.transition(id, 'ended', 'call-completed'); await monitor?.stop(id); },
+      fallbackTarget: async (id: string) => {
+        const call = await runtime.getCallSession(id);
+        // The target was verified against native queue ownership before admission and is pinned per call.
+        return call?.officePulseInstanceId === config.officePulseInstanceId && call.destinationType === 'QUEUE' && /^[a-zA-Z0-9_.-]{1,60}$/.test(call.destinationId ?? '')
+          ? { context: 'aida-agent-queue-fallback', exten: call.destinationId! } : undefined;
+      },
+    } } : {}) });
+  if (authority && agent) monitor = new AgentMonitor({ authority, ...config.livekit, fallback: id => takeover.fallback(id) });
+  const orchestrator = authority && agent && admissions && native && monitor ? new NativeCallOrchestrator({
+    runtime, store: admissions, native: native.authority, livekit, monitor, instanceId: config.officePulseInstanceId,
+    observeCaller: (id, channelId) => takeover.observeCaller(id, channelId),
+    startupTimeoutMs: agent.startupTimeoutMs, setupTimeoutMs: Math.max(100, config.fastAgi.sessionTimeoutMs - 500), available: () => readiness.snapshot().components.ari?.ready === true,
+  }) : nativePbxFallback;
   ari.on('connected', () => { void takeover.reconcile().catch((err) => logger.error('reconciliation failed', { err })); });
   const routes = assembleApiRoutes(
     [
+      ...(authority ? [authority.route(config.voiceEnabled)] : [{ method: 'POST', pattern: '/v1/agent/calls/:callSessionId/bootstrap', trusted: false, rawBody: true,
+        handler: () => ({ status: 503, body: { error: 'authority_unavailable' } }) }]),
       ...pbxInventoryRoutes(inventory?.reader ?? { extensions: async () => [], queues: async () => [] }, config.pbxInventoryScopes, !!inventory, !!provisioner),
       ...pbxProvisioningRoutes(provisioner, config.pbxInventoryScopes, !!provisioner),
     ],
@@ -65,12 +102,12 @@ async function main(): Promise<void> {
     }), config.voiceEnabled),
   );
   const fastAgi = new FastAgiServer({ ...config.fastAgi, logger,
-    handlers: { bootstrap: createBootstrapHandler({ orchestrator: nativePbxFallback,
+    handlers: { bootstrap: createBootstrapHandler({ orchestrator,
       officePulseInstanceId: config.officePulseInstanceId, logger }) } });
   const options = { logger, readiness, trustedServerCidrs: config.http.trustedServerCidrs, trustedProxyCidrs: config.http.trustedProxyCidrs,
     maxBodyBytes: config.http.maxBodyBytes, rateLimitPerMinute: config.http.rateLimitPerMinute, routes };
   const privateApi = new HttpApi(options);
-  // Only health and signature-authenticated callbacks are public; no device admission is wired.
+  // Public routes authenticate with a webhook signature or one-time Agent credentials.
   const publicApi = new HttpApi({ ...publicApiOptions(options), documentation: true });
   await privateApi.listen(config.http.port, config.http.bind);
   await publicApi.listen(config.http.publicPort, config.http.bind);
@@ -90,6 +127,7 @@ async function main(): Promise<void> {
     const [runtimeReady, nocoReady] = await Promise.all([runtime.ping(), noco.ping()]);
     readiness.set('runtime-mysql', runtimeReady);
     readiness.set('nocodb', nocoReady);
+
     if (inventory) {
       try {
         if (!config.pbxInventoryScopes.size) throw new Error('No mapped tenants');
@@ -104,6 +142,9 @@ async function main(): Promise<void> {
       const connected = await provisioner.ping();
       readiness.set('pbx-provisioning', connected, connected ? 'Provisioning database available; effective Asterisk state is not verified' : 'Provisioning database unavailable');
     }
+    const components = readiness.snapshot().components;
+    readiness.set('native-pbx-admission', !!agent && config.pbxInventoryScopes.size > 0 && ['runtime-mysql','nocodb','ari','livekit','pbx-inventory'].every(key => components[key]?.ready === true),
+      agent ? 'Admission implementation configured; real-call acceptance is separate' : 'Native agent admission is disabled');
   };
   await probe();
   const timer = setInterval(() => { void probe(); }, 30000);
@@ -115,7 +156,7 @@ async function main(): Promise<void> {
     closing = true;
     clearInterval(timer);
     ari.stop();
-    void Promise.allSettled([fastAgi.close(), privateApi.close(), publicApi.close(), operations?.close(), runtime.close(), inventory?.close(), provisioner?.close()]).then(() => process.exit(0));
+    void Promise.allSettled([fastAgi.close(), privateApi.close(), publicApi.close(), operations?.close(), monitor?.close(), admissions?.close(), native?.close(), runtime.close(), inventory?.close(), provisioner?.close()]).then(() => process.exit(0));
     setTimeout(() => process.exit(1), 10000).unref();
   };
   process.on('SIGTERM', shutdown);

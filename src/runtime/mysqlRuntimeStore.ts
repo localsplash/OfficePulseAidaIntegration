@@ -259,7 +259,7 @@ export class MysqlRuntimeStore implements RuntimeStore {
     const conn = await this.pool.getConnection();
     try {
       await conn.beginTransaction();
-      const [calls] = await conn.execute<mysql.RowDataPacket[]>('SELECT ended_at FROM call_session WHERE id=? FOR UPDATE', [callSessionId]);
+      const [calls] = await conn.execute<mysql.RowDataPacket[]>('SELECT ended_at,state FROM call_session WHERE id=? FOR UPDATE', [callSessionId]);
       if (!calls[0]) throw new NotFoundError('call not found');
       const [receipts] = await conn.execute<mysql.RowDataPacket[]>('SELECT eventKey FROM aida_tbl_EventReceipt WHERE uidCall=? AND eventKey=?', [callSessionId, event.idempotencyKey]);
       if (receipts.length) { await conn.commit(); return; }
@@ -268,7 +268,7 @@ export class MysqlRuntimeStore implements RuntimeStore {
       await conn.execute('INSERT INTO call_event (id,call_session_id,sequence_number,event_type,payload) VALUES (?,?,?,?,?)',
         [randomUUID(),callSessionId,Number(seqs[0]?.seq),event.eventType,event.payload ? JSON.stringify(event.payload) : null]);
       // Late/replayed bridge or room events cannot resurrect an ended phone call.
-      if (state && !calls[0].ended_at) {
+      if (state && !calls[0].ended_at && !(state === 'screening' && ['admitted','agent-ready','human-active','fallback'].includes(calls[0].state))) {
         await conn.execute('UPDATE call_session SET state=?,ended_at=?,version=version+1 WHERE id=?',
           [state,state === 'ended' ? new Date(event.occurredAt) : null,callSessionId]);
       }
@@ -353,13 +353,7 @@ export class MysqlRuntimeStore implements RuntimeStore {
            ON DUPLICATE KEY UPDATE identity = VALUES(identity), kind = VALUES(kind), left_at = NULL`,
           [delivery.callSessionId, participant.sid, participant.identity ?? null, participant.kind],
         );
-        if (participant.isAgent && !calls[0].ended_at) {
-          await conn.execute(
-            `UPDATE call_session SET agent_participant_sid = ?, version = version + 1
-             WHERE id = ? AND (agent_participant_sid IS NULL OR agent_participant_sid <> ?)`,
-            [participant.sid, delivery.callSessionId, participant.sid],
-          );
-        }
+        // Only atomic bootstrap admission binds the intended dispatch's verified agent SID.
       } else if (delivery.eventType === 'participant_left' && participant) {
         await conn.execute(
           `UPDATE livekit_participant SET left_at = COALESCE(left_at, CURRENT_TIMESTAMP(3))

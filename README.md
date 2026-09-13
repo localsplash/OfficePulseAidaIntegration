@@ -10,9 +10,10 @@ There is no copied extension/queue desired state, provisioning synchronization,
 retry ledger, ring-group adapter or rollback switch. The optional writer changes
 Asterisk Realtime directly; the NocoDB routing graph remains removed. Reusable ARI, LiveKit, FastAGI, takeover and
 device modules and their tests remain. With voice enabled, ARI reconciliation,
-signed LiveKit callbacks and FastAGI still run; native queue admission is pending,
-so bootstrap preserves PBX fallback and TAKEOVER returns 503 before recording a
-command. DRAIN_ACK remains supported. Canonical device admission is unwired until
+signed LiveKit callbacks and FastAGI still run. Agent bootstrap v1 and native
+queue admission are available through explicit opt-in configuration; disabled
+admission preserves PBX fallback. TAKEOVER returns 503 before recording a command
+until its separate native destination resolver is supplied. DRAIN_ACK remains supported. Canonical device admission is unwired until
 native PBX authorization is defined. AidaHandset/AidaAgent work is deferred.
 
 ## Current API
@@ -23,6 +24,7 @@ native PBX authorization is defined. AidaHandset/AidaAgent work is deferred.
 | Private `HTTP_PORT=8085` | extension, queue, queue-member and DID mutations under `/v1/admin/pbx` | Explicit opt-in writer; same tenant and Admin controls |
 | Private `HTTP_PORT=8085` | `/v1/admin/calls/:id`, `/v1/admin/calls/:id/events` | Read-only observed integration call history |
 | Private `HTTP_PORT=8085` | POST `/v1/admin/calls/:id/commands` | DRAIN_ACK with voice enabled; TAKEOVER unavailable until native routing exists |
+| Public `PUBLIC_HTTP_PORT=8086` | POST `/v1/agent/calls/:id/bootstrap` | One-time call credentials; explicit native admission opt-in |
 | Public `PUBLIC_HTTP_PORT=8086` | `/healthz`, `/readyz`, signed LiveKit webhook | Callback verifies signature; disabled voice returns 503 |
 
 Legacy `/v1/provisioning` and canonical device paths remain absent. The smaller
@@ -39,7 +41,8 @@ Read the [PBX inventory contract](docs/PBX_SOURCE_OF_TRUTH.md),
 `NOCODB_BASE_URL` and `NOCODB_API_TOKEN` bootstrap `PlatformConfig.cfg_tbl_Setting`.
 Nonblank environment overrides take precedence over `officepulse`, `aida`, then
 `*` scopes. Restart after changing settings. OfficePulse no longer reads
-AidaAdmin's extension, ring-group, DID, device or business-profile tables.
+AidaAdmin's retired extension, ring-group, DID or device tables. Opt-in native
+admission reads only the selected enabled assistant profile for a pinned call snapshot.
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
@@ -62,8 +65,8 @@ AidaAdmin's extension, ring-group, DID, device or business-profile tables.
 `OFFICEPULSE_INSTANCE_ID` identifies this service. `FASTAGI_PORT` defaults to 4573,
 `FASTAGI_BIND` to 0.0.0.0. Existing takeover timing/MOH and optional Pusher settings
 remain supported. PBX writer credentials are required only when its opt-in flag
-is enabled; Identity/device-admission settings remain unnecessary. Native queue admission is reported unavailable
-independently from connector readiness.
+is enabled; Device admission remains separate. Native Agent admission requires its Identity
+runtime check and the opt-in settings in the bootstrap runbook.
 
 Readiness reports runtime MySQL and NocoDB as critical, and PBX inventory as a
 separate degraded component when not configured/unavailable. ARI is critical
@@ -114,3 +117,6 @@ DID hours/ring/AI behavior, Identity authorization, installed-schema limits, tab
 Realtime routing requirements, and apply-state limits.
 
 `TEST_PBX_PROVISIONING_MYSQL_URL` validates writer grants and transactional tenant isolation on a disposable `aida_pbx_provisioning_*_test` database. `TEST_ASTERISK_BINARY` exercises the shared DID include in an isolated process without SIP/network modules. Neither test mutates the live PBX.
+
+See [Agent bootstrap v1](docs/AGENT_BOOTSTRAP.md) for issue #18 implementation,
+credential/profile contracts, native ingress and SIP prerequisites, and live-call acceptance.

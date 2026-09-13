@@ -1,3 +1,4 @@
+import { agentPaths } from '../agent/openApi.js';
 import { pbxPaths, pbxSchemas } from '../pbx/openApi.js';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -20,6 +21,7 @@ export const openApi = {
   servers: [{ url: '/', description: 'This OfficePulse API deployment' }],
   tags: [{ name: 'Health' }, { name: 'Backend API' }, { name: 'Callbacks' }],
   paths: {
+    ...agentPaths,
     '/healthz': { get: { tags: ['Health'], summary: 'Process health', responses: { '200': response('Process is responding', { type: 'object', properties: { status: { type: 'string', example: 'ok' } } }) } } },
     '/readyz': { get: { tags: ['Health'], summary: 'Dependency readiness', description: 'HTTP 200 means critical dependencies are ready. Inspect components.pbx-inventory separately. fullyOperational stays false when voice/native admission is unavailable.', responses: { '200': response('Critical dependencies ready', reference('Readiness')), '503': response('Critical dependency unavailable', reference('Readiness')) } } },
     ...pbxPaths,

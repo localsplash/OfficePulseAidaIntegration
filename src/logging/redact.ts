@@ -3,7 +3,7 @@
  * Key-name based: any key that looks like credential material is masked.
  */
 
-const SECRET_KEY_PATTERN = /secret|token|password|passwd|authorization|api[-_]?key|credential/i;
+const SECRET_KEY_PATTERN = /secret|token|password|passwd|authorization|api[-_]?key|credential|profile|prompt|transcript|openingStatement|transferStatement|objective/i;
 
 export const REDACTED = '[redacted]';
 

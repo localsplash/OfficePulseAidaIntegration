@@ -21,6 +21,7 @@
     "simulate:ari": "tsx simulators/fake-ari-server.ts"
   },
   "dependencies": {
+    "@livekit/rtc-node": "1.0.0",
     "mysql2": "^3.11.0",
     "swagger-ui-dist": "5.32.15",
     "ws": "^8.18.0"

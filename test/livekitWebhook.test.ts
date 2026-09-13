@@ -34,7 +34,7 @@ class WebhookRuntime extends FakeRuntimeStore {
       if (delivery.eventType === 'participant_joined' && participant) {
         await this.upsertParticipant(delivery.callSessionId, { participantSid: participant.sid,
           identity: participant.identity, kind: participant.kind });
-        if (participant.isAgent && !session.endedAt) session.agentParticipantSid = participant.sid;
+
       } else if (delivery.eventType === 'participant_left' && participant) {
         await this.markParticipantLeft(delivery.callSessionId, participant.sid);
         if (session.agentParticipantSid === participant.sid) session.agentParticipantSid = undefined;
@@ -80,8 +80,8 @@ test('a correctly signed webhook is accepted and recorded', async () => {
   assert.equal(outcome.accepted, true);
   assert.equal(outcome.event, 'participant_joined');
   assert.equal(runtime.participants.get(CALL_SESSION_ID)?.get('PA_agent')?.kind, 'AGENT');
-  // The agent participant SID becomes the handle for later data sends.
-  assert.equal((await runtime.getCallSession(CALL_SESSION_ID))?.agentParticipantSid, 'PA_agent');
+  // A signed join is not authorization for an intended dispatch.
+  assert.equal((await runtime.getCallSession(CALL_SESSION_ID))?.agentParticipantSid, undefined);
   assert.deepEqual(runtime.eventTypes(CALL_SESSION_ID), ['livekit.participant_joined']);
 });
 

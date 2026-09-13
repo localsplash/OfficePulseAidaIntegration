@@ -35,15 +35,17 @@ packaged or applied.
   `TAKEOVER` returns 503 `native_destination_unavailable` before a command claim.
   `DRAIN_ACK` remains supported when voice is enabled.
 - POST `/v1/integrations/livekit/webhooks` verifies LiveKit's signature over the
-  raw body and retains durable event handling. It is the only public application route.
+  raw body and retains durable event handling. Agent bootstrap is separately
+  authenticated by one-time call credentials.
 - `/healthz` and `/readyz` are available on both listeners.
 
 Legacy `/v1/provisioning` routes are removed, and canonical device admission is not registered.
 With `VOICE_ENABLED=false`, all voice mutations/callbacks return 503 `voice_unavailable`
 and connectors stay stopped. With voice enabled, ARI reconciliation, LiveKit
-callbacks and FastAGI run. FastAGI `/bootstrap` returns FALLBACK without overwriting
-PBX-owned fallback variables or reading deleted projections. The protocol adapter
-still supports injectable SCREEN decisions for a future verified native resolver.
+callbacks and FastAGI run. Without native admission enabled, FastAGI `/bootstrap`
+returns FALLBACK without overwriting PBX-owned fallback variables or reading
+deleted projections. Explicit native admission opt-in wires the verified
+bootstrap v1 orchestrator described in AGENT_BOOTSTRAP.md.
 Device, ARI, takeover, protocol/event libraries and their tests remain reusable.
 
 The private listener is CIDR-admitted and never published through the browser
@@ -57,3 +59,10 @@ Native queue call admission/control, native CDR/recording access and external
 PBX acceptance are tracked
 in issues #2/#7 and AidaAdmin #29. AidaAgent and AidaHandset implementation remains
 deferred. There is no separate AidaOfficePbxAdmin or AidaControl application.
+
+## Agent bootstrap v1
+
+`POST /v1/agent/calls/{callSessionId}/bootstrap` uses one-time call credentials
+on the public listener. It is unavailable until native admission is enabled.
+See [the bootstrap runbook](AGENT_BOOTSTRAP.md) for the immutable profile,
+participant verification, native fallback, configuration and acceptance contract.

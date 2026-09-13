@@ -74,8 +74,11 @@ test('SCREEN sets the routing variables Asterisk needs to join LiveKit', async (
   assert.equal(call.setVars.get('AIDA_SIP_DESTINATION'), 'aida-cs-1@sip.livekit.test');
 
   assert.deepEqual(requests[0], {
-    officePulseInstanceId: 'op-primary',
+    officePulseInstanceId: 'op-env',
+    ingressContext: undefined,
+    fallbackQueue: undefined,
     asteriskLinkedId: '1756400100.42',
+    asteriskChannelId: CALL_ENV.agi_uniqueid,
     callerNumber: '15551230001',
     didE164: '15559870001',
   });

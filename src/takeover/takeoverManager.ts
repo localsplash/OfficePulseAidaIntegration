@@ -37,6 +37,8 @@ interface CallSession {
   callSessionId: string;
   linkedid?: string;
   callerChannelId?: string;
+  callerEntered?: boolean;
+  fallbackWork?: Promise<void>;
   callerNumber?: string;
   livekitChannelId?: string;
   bridgeId?: string;
@@ -48,6 +50,9 @@ interface CallSession {
   completedCommands: Map<string, TakeoverAck>;
   eventSeq: number;
   ringingReported: boolean;
+  fallbackInProgress?: boolean;
+  fellBack?: boolean;
+  fallbackTarget?: { context: string; exten: string };
 }
 
 export interface TakeoverManagerOptions {
@@ -59,6 +64,12 @@ export interface TakeoverManagerOptions {
   defaultMohClass: string;
   /** PJSIP endpoint name of the existing LiveKit Cloud SIP trunk. */
   livekitTrunkEndpoint?: string;
+  nativeAdmission?: {
+    validate(callId: string, linkedId: string | undefined, routeToken: string | undefined): Promise<boolean>;
+    failed(callId: string): Promise<void>;
+    ended(callId: string): Promise<void>;
+    fallbackTarget(callId: string): Promise<{ context: string; exten: string } | undefined>;
+  };
 }
 
 const CAUSE_TO_REASON: Record<number, TakeoverFailureReason> = {
@@ -86,6 +97,12 @@ export class TakeoverManager {
     opts.ari.on('StasisStart', (ev) => void this.onStasisStart(ev as StasisStartEvent));
     opts.ari.on('ChannelStateChange', (ev) => void this.onChannelStateChange(ev as ChannelStateChangeEvent));
     opts.ari.on('ChannelDestroyed', (ev) => void this.onChannelDestroyed(ev as ChannelDestroyedEvent));
+  }
+
+  observeCaller(callSessionId: string, channelId: string): void {
+    const session = this.ensureSession(callSessionId);
+    session.callerChannelId = channelId;
+    this.channelToSession.set(channelId, callSessionId);
   }
 
   sessionCount(): number {
@@ -139,14 +156,19 @@ export class TakeoverManager {
       else if (role === 'human') await this.onHumanAnswered(callSessionId, ev);
       else if (role === 'livekit') await this.onLivekitUp(callSessionId, ev);
     } catch (err) {
-      this.opts.logger.error('stasis event handling failed', { role, callSessionId, err });
+      this.opts.logger.error('stasis event handling failed', { role, callSessionId });
+      if (role === 'screen' && this.opts.nativeAdmission) {
+        await this.opts.nativeAdmission.failed(callSessionId).catch(() => {});
+        await this.fallback(callSessionId).catch(() => {});
+      }
     }
   }
 
   /** Caller channel arrives from the dialplan SCREEN path. */
   private async onCallerEntered(callSessionId: string, ev: StasisStartEvent): Promise<void> {
     const session = this.ensureSession(callSessionId);
-    if (session.callerChannelId === ev.channel.id) return; // duplicate event
+    if (session.callerEntered && session.callerChannelId === ev.channel.id) return; // duplicate event
+    session.callerEntered = true;
     session.callerChannelId = ev.channel.id;
     session.callerNumber = ev.channel.caller?.number;
     this.channelToSession.set(ev.channel.id, callSessionId);
@@ -154,10 +176,17 @@ export class TakeoverManager {
 
     const ari = this.opts.ari;
     session.linkedid = (await ari.getChannelVar(ev.channel.id, 'CHANNEL(linkedid)')) ?? undefined;
+    if (this.opts.nativeAdmission) {
+      const queue = await ari.getChannelVar(ev.channel.id, 'AIDA_FALLBACK_EXTENSION');
+      if (/^[a-zA-Z0-9_.-]{1,60}$/.test(queue ?? '')) session.fallbackTarget = { context: 'aida-agent-queue-fallback', exten: queue! };
+    }
     const sipDestination = await ari.getChannelVar(ev.channel.id, CHANVAR.sipDestination);
+    const routeToken = this.opts.nativeAdmission ? await ari.getChannelVar(ev.channel.id, 'AIDA_ROUTE_TOKEN') : undefined;
+    if (this.opts.nativeAdmission && !await this.opts.nativeAdmission.validate(callSessionId, session.linkedid, routeToken)) throw new Error('call admission unavailable');
+    if (this.opts.nativeAdmission && (!/^[A-Za-z0-9_-]{43,256}$/.test(routeToken ?? '') || sipDestination !== `aida-${callSessionId}`)) throw new Error('SIP binding unavailable');
     if (!sipDestination) {
-      log.error('caller entered stasis without a SIP destination; hanging up to dialplan fallback');
-      await this.safeAri(() => ari.hangup(ev.channel.id, 'congestion'));
+      log.error('caller entered stasis without a SIP destination');
+      await this.fallback(callSessionId);
       this.cleanupSession(session);
       return;
     }
@@ -172,7 +201,8 @@ export class TakeoverManager {
     session.bridgeId = bridge.id;
     await ari.addToBridge(bridge.id, ev.channel.id);
 
-    const endpoint = this.opts.livekitTrunkEndpoint
+    if (session.fellBack || !this.sessions.has(callSessionId)) return;
+    const endpoint = this.opts.nativeAdmission ? `Local/${sipDestination}@aida-agent-sip/n` : this.opts.livekitTrunkEndpoint
       ? `PJSIP/${sipDestination}@${this.opts.livekitTrunkEndpoint}`
       : `PJSIP/${sipDestination}`;
     const livekit = await ari.originate({
@@ -182,6 +212,7 @@ export class TakeoverManager {
       variables: {
         [CHANVAR.callSessionId]: callSessionId,
         [CHANVAR.role]: 'livekit',
+        ...(routeToken ? { __AIDA_ROUTE_TOKEN: routeToken, __AIDA_LIVEKIT_TRUNK: this.opts.livekitTrunkEndpoint! } : {}),
         // Header mapping: the LiveKit SIP trunk maps this header onto a
         // SIP participant attribute, so the agent can correlate its leg.
         //
@@ -193,6 +224,7 @@ export class TakeoverManager {
         'PJSIP_HEADER(add,X-Aida-Call-Session)': callSessionId,
       },
     });
+    if (session.fellBack || !this.sessions.has(callSessionId)) { await this.safeAri(() => ari.hangup(livekit.id)); return; }
     session.livekitChannelId = livekit.id;
     this.channelToSession.set(livekit.id, callSessionId);
     log.info('screening leg originated', { livekitChannelId: livekit.id });
@@ -202,7 +234,7 @@ export class TakeoverManager {
   /** LiveKit leg answered — join it to the caller's bridge. */
   private async onLivekitUp(callSessionId: string, ev: StasisStartEvent): Promise<void> {
     const session = this.sessions.get(callSessionId);
-    if (!session?.bridgeId) return;
+    if (!session?.bridgeId || session.fellBack) { await this.safeAri(() => this.opts.ari.hangup(ev.channel.id)); return; }
     session.livekitChannelId = ev.channel.id;
     this.channelToSession.set(ev.channel.id, callSessionId);
     await this.safeAri(() => this.opts.ari.setChannelVar(ev.channel.id, CHANVAR.callSessionId, callSessionId));
@@ -278,6 +310,7 @@ export class TakeoverManager {
       await this.safeAri(() => this.opts.ari.hangup(ev.channel.id));
       return;
     }
+    if (session.fallbackInProgress || session.fellBack) { await this.safeAri(() => this.opts.ari.hangup(ev.channel.id)); return; }
     if (session.humanAnswered) return; // duplicate event
     session.humanChannelId = ev.channel.id;
     session.humanAnswered = true;
@@ -370,12 +403,16 @@ export class TakeoverManager {
     }
     if (ev.channel.id === session.livekitChannelId) {
       session.livekitChannelId = undefined;
-      if (!session.humanAnswered) {
+      if (!session.humanAnswered && !session.fellBack) {
         // Aida died mid-screening with no takeover done. The event is
         // recorded so an operator or handset can command a takeover. The
         // caller stays up (dialplan fallback only covers pre-Stasis).
         this.log(session).warn('aida leg lost during screening');
         await this.emitEvent(session, 'aida-lost');
+        if (this.opts.nativeAdmission) {
+          await this.opts.nativeAdmission.failed(callSessionId).catch(() => {});
+          await this.fallback(callSessionId).catch(() => {});
+        }
       }
       return;
     }
@@ -430,7 +467,37 @@ export class TakeoverManager {
       }
     }
     await this.emitEvent(session, 'hangup');
+    await this.opts.nativeAdmission?.ended(session.callSessionId).catch(() => {});
     this.cleanupSession(session);
+  }
+
+  /** Return the existing caller to PBX dialplan. Never touch an established human bridge. */
+  async fallback(callSessionId: string): Promise<void> {
+    const session = this.sessions.get(callSessionId);
+    if (!session?.callerChannelId || !session.callerEntered) return; // pre-Stasis failure is handled by the PBX wrapper
+    if (session.fallbackWork) return session.fallbackWork;
+    if (session.humanAnswered || session.fellBack) return;
+    session.fallbackInProgress = true;
+    const callerId = session.callerChannelId;
+    const work = (async () => {
+      try {
+        const target = session.fallbackTarget ?? (this.opts.nativeAdmission ? await this.opts.nativeAdmission.fallbackTarget(callSessionId) : { context: 'aida-post-bootstrap', exten: 's' });
+        if (!target) throw new Error('native fallback unavailable');
+        const ari = this.opts.ari;
+        await ari.setChannelVar(callerId, 'AIDA_DISPOSITION', 'FALLBACK');
+        if (session.bridgeId) await ari.removeFromBridge(session.bridgeId, callerId);
+        await ari.continueInDialplan(callerId, target.context, target.exten);
+        session.fellBack = true;
+        // Keep caller correlation until ChannelDestroyed records actual telephone completion.
+        for (const id of [session.livekitChannelId, session.humanChannelId]) {
+          if (id) { this.channelToSession.delete(id); await this.safeAri(() => ari.hangup(id)); }
+        }
+        session.livekitChannelId = undefined; session.humanChannelId = undefined;
+        await this.emitEvent(session, 'pbx-fallback');
+      } finally { session.fallbackInProgress = false; session.fallbackWork = undefined; }
+    })();
+    session.fallbackWork = work;
+    return work;
   }
 
   private cleanupSession(session: CallSession): void {
@@ -474,6 +541,7 @@ export class TakeoverManager {
         }
       } else {
         session.callerChannelId = channel.id;
+        session.callerEntered = channel.dialplan?.app_name === 'Stasis';
         session.callerNumber = channel.caller?.number;
       }
     }
@@ -484,6 +552,12 @@ export class TakeoverManager {
           const session = this.sessions.get(callSessionId);
           if (session) session.bridgeId = bridge.id;
         }
+      }
+    }
+    if (this.opts.nativeAdmission) for (const session of this.sessions.values()) {
+      if (!session.humanAnswered) {
+        await this.opts.nativeAdmission.failed(session.callSessionId).catch(() => {});
+        await this.fallback(session.callSessionId).catch(() => {});
       }
     }
     this.opts.logger.info('takeover state reconciled', { sessions: this.sessions.size });

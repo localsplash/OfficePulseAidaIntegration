@@ -3,14 +3,18 @@ import type { Logger } from '../logging/logger.js';
 export interface BootstrapRequest {
   officePulseInstanceId: string;
   asteriskLinkedId: string;
+  asteriskChannelId?: string;
   callerNumber?: string;
   didE164: string;
+  ingressContext?: string;
+  fallbackQueue?: string;
 }
 export interface BootstrapDecision {
   disposition: 'SCREEN' | 'FALLBACK' | 'REJECT';
   callSessionId?: string;
   roomName?: string;
   sipDestination?: string;
+  routeToken?: string;
   fallback?: { context: string; exten: string; source: string };
   fallbackReason?: string;
 }
@@ -60,11 +64,11 @@ export function createBootstrapHandler(deps: BootstrapHandlerDeps): (session: Ag
     const env = session.env;
     const uniqueid = env['agi_uniqueid'] ?? '';
     const channel = env['agi_channel'] ?? '';
-    const didE164 = env['agi_extension'] ?? '';
+    const didE164 = env['agi_arg_1'] ?? env['agi_extension'] ?? '';
     const callerNumber = sanitizeCallerNumber(env['agi_callerid']);
 
     const linkedid = (await safeGetVar(session, 'ASTERISK_LINKEDID')) || uniqueid;
-    const instanceId = (await safeGetVar(session, 'OFFICEPULSE_INSTANCE_ID')) || deps.officePulseInstanceId;
+    const instanceId = deps.officePulseInstanceId;
     const log = deps.logger.child({ linkedid, uniqueid, channel });
 
     let decision: BootstrapDecision;
@@ -72,8 +76,11 @@ export function createBootstrapHandler(deps: BootstrapHandlerDeps): (session: Ag
       decision = await deps.orchestrator.bootstrapInboundCall({
         officePulseInstanceId: instanceId,
         asteriskLinkedId: linkedid,
+        asteriskChannelId: uniqueid,
         callerNumber,
         didE164,
+        ingressContext: env.agi_arg_2,
+        fallbackQueue: env.agi_arg_3,
       });
     } catch (err) {
       // The orchestrator degrades internally; reaching here means something
@@ -83,12 +90,19 @@ export function createBootstrapHandler(deps: BootstrapHandlerDeps): (session: Ag
       return;
     }
 
+    if (decision.callSessionId) await session.setVariable(VAR.callSessionId, decision.callSessionId);
     switch (decision.disposition) {
       case 'SCREEN': {
-        await session.setVariable(VAR.disposition, 'SCREEN');
+        await session.setVariable(VAR.disposition, 'FALLBACK');
         await session.setVariable(VAR.callSessionId, decision.callSessionId as string);
         await session.setVariable(VAR.roomName, decision.roomName as string);
         await session.setVariable(VAR.sipDestination, decision.sipDestination as string);
+        if (decision.routeToken) await session.setVariable('__AIDA_ROUTE_TOKEN', decision.routeToken);
+        if (decision.fallback) {
+          await session.setVariable(VAR.fallbackContext, decision.fallback.context);
+          await session.setVariable(VAR.fallbackExtension, decision.fallback.exten);
+        }
+        await session.setVariable(VAR.disposition, 'SCREEN');
         log.info('bootstrap SCREEN', { callSessionId: decision.callSessionId, roomName: decision.roomName });
         return;
       }

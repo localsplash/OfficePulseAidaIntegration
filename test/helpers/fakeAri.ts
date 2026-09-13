@@ -8,6 +8,8 @@ import type { AriApi, AriBridge, AriChannel, OriginateParams } from '../../src/a
  */
 export class FakeAri extends EventEmitter implements AriApi {
   originates: OriginateParams[] = [];
+  continued: Array<{ channelId: string; context: string; exten: string }> = [];
+  async continueInDialplan(channelId: string, context: string, exten: string): Promise<void> { this.continued.push({ channelId, context, exten }); }
   hangups: Array<{ channelId: string; reason?: string }> = [];
   bridges = new Map<string, { type: string; channels: Set<string> }>();
   mohStarts: Array<{ bridgeId: string; mohClass: string }> = [];

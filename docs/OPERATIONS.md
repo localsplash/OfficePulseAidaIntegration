@@ -58,3 +58,48 @@ tenant mappings, native queue member counts and Swagger assets after restarting
 the integration and reloading nginx. A successful diagnostics deployment does not
 prove live call takeover, carrier registration, native CDR coverage or maintenance
 operations; those capabilities remain separate work.
+
+## Source version and health checks
+
+`GET /healthz` on both API listeners returns HTTP 200 with:
+
+```json
+{
+  "status": "ok",
+  "version": "2026.9.14.21.30",
+  "revision": "<full Git commit ID>",
+  "sourceUpdatedAt": "2026-09-14T21:30:42.000Z",
+  "dirty": false
+}
+```
+
+`npm run build` stamps the artifact with the HEAD commit's **committer time in
+UTC**, formatted `YYYY.M.D.H.M` (month, day, hour, minute without padding).
+This is calendar versioning, not a five-part npm/SemVer package version.
+The package version and OpenAPI contract version remain separate concepts.
+No manual version bump is needed: commit the code, build, and restart the service.
+Rebuilding the same commit keeps the same version, regardless of build time.
+The full `revision` distinguishes commits within one minute and is the definitive
+check against the expected branch HEAD. Commit timestamps depend on Git's clock
+and are not a guaranteed monotonic sequence across branches or rewritten history.
+
+Tracked modifications, staged changes, or untracked non-ignored files append
+`-dirty` to the version and set `dirty: true`; deploy from a clean checkout for an
+exact revision identity. `npm run dev` reports `unbuilt` and null metadata.
+Compiled metadata is embedded in `dist/buildInfo.js`; runtime environment changes
+or later Git commits cannot change the running process's identity.
+
+Docker excludes `.git`, so pass source metadata explicitly from the checkout:
+
+```sh
+docker build -t aida-integration:local \
+  --build-arg BUILD_REVISION="$(git rev-parse HEAD)" \
+  --build-arg SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)" \
+  --build-arg BUILD_DIRTY="$(test -z "$(git status --porcelain)" && echo false || echo true)" .
+```
+
+For a source archive, set the same three environment variables before
+`npm run build`. Missing or malformed identity fails the build rather than
+silently using the build clock. CI supplies these arguments automatically.
+`SOURCE_DATE_EPOCH` follows the [reproducible-builds source timestamp convention](https://reproducible-builds.org/docs/source-date-epoch/);
+the readable version follows [CalVer](https://calver.org/).

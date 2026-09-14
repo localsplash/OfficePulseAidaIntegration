@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
 
 jobs:
@@ -23,7 +23,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build image
-        run: docker build -t aida-integration:ci .
+        run: |
+          docker build -t aida-integration:ci \
+            --build-arg BUILD_REVISION="$(git rev-parse HEAD)" \
+            --build-arg SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)" \
+            --build-arg BUILD_DIRTY=false .
       - name: Container runs as non-root
         run: |
           test "$(docker run --rm aida-integration:ci whoami)" = "node"

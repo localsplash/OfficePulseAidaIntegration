@@ -5,6 +5,10 @@ COPY package.json package-lock.json ./
 RUN npm ci
 COPY tsconfig.json tsconfig.build.json ./
 COPY src ./src
+COPY scripts/write-build-info.mjs ./scripts/
+ARG BUILD_REVISION
+ARG SOURCE_DATE_EPOCH
+ARG BUILD_DIRTY
 RUN npm run build && npm prune --omit=dev
 
 FROM node:22-bookworm-slim

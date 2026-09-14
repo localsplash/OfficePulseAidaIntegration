@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { buildInfo } from '../buildInfo.js';
 import { randomUUID } from 'node:crypto';
 import type { Logger } from '../logging/logger.js';
 import type { Readiness } from '../readiness.js';
@@ -179,7 +180,7 @@ export class HttpApi {
     try {
       if (this.opts.documentation && method === 'GET' && await serveDocumentation(path, res)) return;
       if (path === '/healthz') {
-        this.send(res, 200, { status: 'ok' }, correlationId);
+        this.send(res, 200, { status: 'ok', ...buildInfo }, correlationId);
         return;
       }
       if (path === '/readyz') {

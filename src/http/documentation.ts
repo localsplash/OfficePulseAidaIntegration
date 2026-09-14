@@ -22,7 +22,7 @@ export const openApi = {
   tags: [{ name: 'Health' }, { name: 'Backend API' }, { name: 'Callbacks' }],
   paths: {
     ...agentPaths,
-    '/healthz': { get: { tags: ['Health'], summary: 'Process health', responses: { '200': response('Process is responding', { type: 'object', properties: { status: { type: 'string', example: 'ok' } } }) } } },
+    '/healthz': { get: { tags: ['Health'], summary: 'Process health', responses: { '200': response('Process is responding', { type: 'object', properties: { status: { type: 'string', example: 'ok' }, version: { type: 'string', example: '2026.9.14.21.30', description: 'UTC commit timestamp (YYYY.M.D.H.M); -dirty for uncommitted changes; unbuilt in source development mode' }, revision: { type: 'string', nullable: true, description: 'Full Git commit ID' }, sourceUpdatedAt: { type: 'string', format: 'date-time', nullable: true }, dirty: { type: 'boolean', nullable: true } } }) } } },
     '/readyz': { get: { tags: ['Health'], summary: 'Dependency readiness', description: 'HTTP 200 means critical dependencies are ready. Inspect components.pbx-inventory separately. fullyOperational stays false when voice/native admission is unavailable.', responses: { '200': response('Critical dependencies ready', reference('Readiness')), '503': response('Critical dependency unavailable', reference('Readiness')) } } },
     ...pbxPaths,
     '/v1/admin/calls/{id}': { get: privateGet('Read an observed integration call', [callId], reference('Call')) },

@@ -1,0 +1,49 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const script = fileURLToPath(new URL('../scripts/write-build-info.mjs', import.meta.url));
+const timestamp = '2026-01-02T03:04:59+05:00';
+const epoch = String(Date.parse(timestamp) / 1000);
+
+test('build identity is stable, UTC, revision-specific, and marks uncommitted changes', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'aida-build-'));
+  const env = { ...process.env };
+  delete env.BUILD_REVISION;
+  delete env.SOURCE_DATE_EPOCH;
+  delete env.BUILD_DIRTY;
+  const git = (...args: string[]) => execFileSync('git', args, { cwd, env, encoding: 'utf8', stdio: 'pipe' }).trim();
+  const build = (overrides = {}) => JSON.parse(execFileSync(process.execPath, [script], { cwd, env: { ...env, ...overrides }, encoding: 'utf8', stdio: 'pipe' }));
+  try {
+    git('init');
+    git('config', 'user.name', 'Build test');
+    git('config', 'user.email', 'build@example.invalid');
+    writeFileSync(join(cwd, '.gitignore'), 'dist/\n');
+    git('add', '.');
+    execFileSync('git', ['commit', '-m', 'fixture'], { cwd, env: { ...env, GIT_AUTHOR_DATE: timestamp, GIT_COMMITTER_DATE: timestamp }, stdio: 'pipe' });
+    const clean = build();
+    assert.deepEqual(clean, { version: '2026.1.1.22.4', revision: git('rev-parse', 'HEAD'), sourceUpdatedAt: '2026-01-01T22:04:59.000Z', dirty: false });
+    const artifact = readFileSync(join(cwd, 'dist/buildInfo.js'), 'utf8');
+    assert.deepEqual(build({ TZ: 'Pacific/Honolulu' }), clean);
+    assert.equal(readFileSync(join(cwd, 'dist/buildInfo.js'), 'utf8'), artifact);
+    writeFileSync(join(cwd, 'new-source'), 'uncommitted');
+    assert.equal(build().version, '2026.1.1.22.4-dirty');
+    assert.equal(build().dirty, true);
+    git('add', 'new-source');
+    assert.equal(build().dirty, true);
+    execFileSync('git', ['commit', '-m', 'same minute'], { cwd, env: { ...env, GIT_AUTHOR_DATE: timestamp, GIT_COMMITTER_DATE: timestamp }, stdio: 'pipe' });
+    assert.equal(build().version, clean.version);
+    assert.notEqual(build().revision, clean.revision);
+    rmSync(join(cwd, '.git'), { recursive: true });
+    assert.deepEqual(build({ BUILD_REVISION: clean.revision, SOURCE_DATE_EPOCH: epoch, BUILD_DIRTY: 'false' }), clean);
+    assert.throws(() => build());
+    assert.throws(() => build({ BUILD_REVISION: clean.revision }));
+    assert.throws(() => build({ BUILD_REVISION: clean.revision, SOURCE_DATE_EPOCH: 'invalid', BUILD_DIRTY: 'false' }));
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});

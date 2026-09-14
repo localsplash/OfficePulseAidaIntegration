@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { buildInfo } from '../src/buildInfo.js';
 import assert from 'node:assert/strict';
 import { HttpApi, publicApiOptions } from '../src/http/httpServer.js';
 import { Readiness } from '../src/readiness.js';
@@ -47,7 +48,9 @@ async function withApi(
 
 test('healthz is open; readyz reflects dependency state', async () => {
   await withApi(async (base, readiness) => {
-    assert.equal((await fetch(`${base}/healthz`)).status, 200);
+    const health = await fetch(`${base}/healthz`);
+    assert.equal(health.status, 200);
+    assert.deepEqual(await health.json(), { status: 'ok', ...buildInfo });
     assert.equal((await fetch(`${base}/readyz`)).status, 200);
     readiness.set('dep', false, 'mysql lost');
     const degraded = await fetch(`${base}/readyz`);

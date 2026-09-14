@@ -225,8 +225,8 @@
                     },
                     "version": {
                       "type": "string",
-                      "example": "2026.9.14.21.30",
-                      "description": "UTC commit timestamp (YYYY.M.D.H.M); -dirty for uncommitted changes; unbuilt in source development mode"
+                      "example": "2026.9.14.14.30",
+                      "description": "Pacific (America/Los_Angeles, PST/PDT) commit timestamp (YYYY.M.D.H.M); -dirty for uncommitted changes; unbuilt in source development mode"
                     },
                     "revision": {
                       "type": "string",
@@ -236,7 +236,12 @@
                     "sourceUpdatedAt": {
                       "type": "string",
                       "format": "date-time",
-                      "nullable": true
+                      "nullable": true,
+                      "description": "Commit time with Pacific UTC offset"
+                    },
+                    "timeZone": {
+                      "type": "string",
+                      "example": "America/Los_Angeles"
                     },
                     "dirty": {
                       "type": "boolean",

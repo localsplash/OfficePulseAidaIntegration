@@ -66,17 +66,24 @@ operations; those capabilities remain separate work.
 ```json
 {
   "status": "ok",
-  "version": "2026.9.14.21.30",
+  "version": "2026.9.14.14.30",
   "revision": "<full Git commit ID>",
-  "sourceUpdatedAt": "2026-09-14T21:30:42.000Z",
+  "sourceUpdatedAt": "2026-09-14T14:30:42-07:00",
+  "timeZone": "America/Los_Angeles",
   "dirty": false
 }
 ```
 
 `npm run build` stamps the artifact with the HEAD commit's **committer time in
-UTC**, formatted `YYYY.M.D.H.M` (month, day, hour, minute without padding).
+Pacific time (`America/Los_Angeles`, PST/PDT)**, formatted `YYYY.M.D.H.M` (month, day, hour, minute without padding).
 This is calendar versioning, not a five-part npm/SemVer package version.
 The package version and OpenAPI contract version remain separate concepts.
+The commit timestamp originates from the machine creating the commit (including
+GitHub when it creates a merge commit), not the build machine's current clock.
+The display timezone is explicitly pinned, independent of host/container `TZ`.
+`sourceUpdatedAt` includes the applicable Pacific offset, and `timeZone` names the
+zone. The repeated hour when daylight saving time ends can repeat a version;
+use `revision` for identity and the offset-bearing timestamp for chronology.
 No manual version bump is needed: commit the code, build, and restart the service.
 Rebuilding the same commit keeps the same version, regardless of build time.
 The full `revision` distinguishes commits within one minute and is the definitive
@@ -85,7 +92,7 @@ and are not a guaranteed monotonic sequence across branches or rewritten history
 
 Tracked modifications, staged changes, or untracked non-ignored files append
 `-dirty` to the version and set `dirty: true`; deploy from a clean checkout for an
-exact revision identity. `npm run dev` reports `unbuilt` and null metadata.
+exact revision identity. `npm run dev` reports `unbuilt` and null revision metadata.
 Compiled metadata is embedded in `dist/buildInfo.js`; runtime environment changes
 or later Git commits cannot change the running process's identity.
 

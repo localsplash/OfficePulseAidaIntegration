@@ -10,7 +10,7 @@ const script = fileURLToPath(new URL('../scripts/write-build-info.mjs', import.m
 const timestamp = '2026-01-02T03:04:59+05:00';
 const epoch = String(Date.parse(timestamp) / 1000);
 
-test('build identity is stable, UTC, revision-specific, and marks uncommitted changes', () => {
+test('build identity is stable, Pacific, revision-specific, and marks uncommitted changes', () => {
   const cwd = mkdtempSync(join(tmpdir(), 'aida-build-'));
   const env = { ...process.env };
   delete env.BUILD_REVISION;
@@ -26,12 +26,12 @@ test('build identity is stable, UTC, revision-specific, and marks uncommitted ch
     git('add', '.');
     execFileSync('git', ['commit', '-m', 'fixture'], { cwd, env: { ...env, GIT_AUTHOR_DATE: timestamp, GIT_COMMITTER_DATE: timestamp }, stdio: 'pipe' });
     const clean = build();
-    assert.deepEqual(clean, { version: '2026.1.1.22.4', revision: git('rev-parse', 'HEAD'), sourceUpdatedAt: '2026-01-01T22:04:59.000Z', dirty: false });
+    assert.deepEqual(clean, { version: '2026.1.1.14.4', revision: git('rev-parse', 'HEAD'), sourceUpdatedAt: '2026-01-01T14:04:59-08:00', timeZone: 'America/Los_Angeles', dirty: false });
     const artifact = readFileSync(join(cwd, 'dist/buildInfo.js'), 'utf8');
     assert.deepEqual(build({ TZ: 'Pacific/Honolulu' }), clean);
     assert.equal(readFileSync(join(cwd, 'dist/buildInfo.js'), 'utf8'), artifact);
     writeFileSync(join(cwd, 'new-source'), 'uncommitted');
-    assert.equal(build().version, '2026.1.1.22.4-dirty');
+    assert.equal(build().version, '2026.1.1.14.4-dirty');
     assert.equal(build().dirty, true);
     git('add', 'new-source');
     assert.equal(build().dirty, true);
@@ -40,6 +40,18 @@ test('build identity is stable, UTC, revision-specific, and marks uncommitted ch
     assert.notEqual(build().revision, clean.revision);
     rmSync(join(cwd, '.git'), { recursive: true });
     assert.deepEqual(build({ BUILD_REVISION: clean.revision, SOURCE_DATE_EPOCH: epoch, BUILD_DIRTY: 'false' }), clean);
+    for (const [utc, version, local] of [
+      ['2026-09-14T21:30:42Z', '2026.9.14.14.30', '2026-09-14T14:30:42-07:00'],
+      ['2026-03-08T09:59:00Z', '2026.3.8.1.59', '2026-03-08T01:59:00-08:00'],
+      ['2026-03-08T10:00:00Z', '2026.3.8.3.0', '2026-03-08T03:00:00-07:00'],
+      ['2026-11-01T08:30:00Z', '2026.11.1.1.30', '2026-11-01T01:30:00-07:00'],
+      ['2026-11-01T09:30:00Z', '2026.11.1.1.30', '2026-11-01T01:30:00-08:00'],
+      ['2026-01-02T08:00:00Z', '2026.1.2.0.0', '2026-01-02T00:00:00-08:00'],
+    ]) {
+      const info = build({ BUILD_REVISION: clean.revision, SOURCE_DATE_EPOCH: String(Date.parse(utc!) / 1000), BUILD_DIRTY: 'false', TZ: 'UTC' });
+      assert.equal(info.version, version);
+      assert.equal(info.sourceUpdatedAt, local);
+    }
     assert.throws(() => build());
     assert.throws(() => build({ BUILD_REVISION: clean.revision }));
     assert.throws(() => build({ BUILD_REVISION: clean.revision, SOURCE_DATE_EPOCH: 'invalid', BUILD_DIRTY: 'false' }));

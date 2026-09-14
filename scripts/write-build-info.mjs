@@ -23,8 +23,16 @@ const date = new Date(Number(epoch) * 1000);
 if (!Number.isSafeInteger(Number(epoch)) || !Number.isFinite(date.getTime())) {
   throw new Error('Invalid SOURCE_DATE_EPOCH');
 }
-const version = [date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate(), date.getUTCHours(), date.getUTCMinutes()].join('.');
-const buildInfo = { version: version + (dirty ? '-dirty' : ''), revision, sourceUpdatedAt: date.toISOString(), dirty };
+// Pin the display zone so developer machines and CI produce the same identity.
+const timeZone = 'America/Los_Angeles';
+const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+  timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: '2-digit', minute: '2-digit', second: '2-digit',
+  hourCycle: 'h23', timeZoneName: 'longOffset',
+}).formatToParts(date).map(({ type, value }) => [type, value]));
+const version = ['year', 'month', 'day', 'hour', 'minute'].map(key => Number(parts[key])).join('.');
+const sourceUpdatedAt = `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}${parts.timeZoneName.replace('GMT', '')}`;
+const buildInfo = { version: version + (dirty ? '-dirty' : ''), revision, sourceUpdatedAt, timeZone, dirty };
 mkdirSync('dist', { recursive: true });
 // Replace the compiled development placeholder. Runtime needs neither Git nor env overrides.
 writeFileSync('dist/buildInfo.js', `export const buildInfo = Object.freeze(${JSON.stringify(buildInfo)});\n`);

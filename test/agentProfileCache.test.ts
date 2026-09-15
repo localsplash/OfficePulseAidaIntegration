@@ -5,7 +5,7 @@ import { FakeNocoApi } from './helpers/fakeCloud.js';
 import { captureLogger } from './helpers/capture.js';
 
 const CALL = { callSessionId: '11111111-2222-4333-8444-555555555555', tenantId: '42', didE164: '+15559870001' };
-const row = (over: Record<string, unknown> = {}) => ({ id: 'profile42', revision: 3, iTenantId: 42, enabled: true,
+const row = (over: Record<string, unknown> = {}) => ({ id: 'profile42', revision: 3, iTenantId: 42, enabled: 1,
   business_name: 'Acme Dental', prompt: 'Greet the caller.', tone: 'warm', opening_statement: 'Thanks for calling.', ...over });
 function seeded(rows: Record<string, unknown>[] = [row()]): FakeNocoApi {
   const noco = new FakeNocoApi(); noco.seed('aida_tbl_AssistantProfile', rows); return noco;
@@ -19,7 +19,12 @@ test('PlatformConfig loading selects exactly one enabled profile and validates i
   const ambiguous = seeded([row(), row({ id: 'profile43' })]);
   assert.equal(await nocoProfileSource(ambiguous, new Map()).profile('42'), undefined);
   assert.equal((await nocoProfileSource(ambiguous, new Map([['42', 'profile43']])).profile('42'))?.profileId, 'profile43');
-  assert.equal(await nocoProfileSource(seeded([row({ enabled: false })]), new Map()).profile('42'), undefined);
+  // The column is stored as 1/0; a boolean filter pushed into NocoDB matches nothing.
+  for (const enabled of [1, '1', true]) assert.equal((await nocoProfileSource(seeded([row({ enabled })]), new Map()).profile('42'))?.profileId, 'profile42', String(enabled));
+  for (const enabled of [0, '0', false, null]) assert.equal(await nocoProfileSource(seeded([row({ enabled })]), new Map()).profile('42'), undefined, String(enabled));
+  // One enabled profile among disabled siblings is unambiguous.
+  assert.equal((await nocoProfileSource(seeded([row({ id: 'off1', enabled: 0 }), row(), row({ id: 'off2', enabled: 0 })]), new Map()).profile('42'))?.profileId, 'profile42');
+  assert.equal(await nocoProfileSource(seeded([row({ iTenantId: 43 })]), new Map()).profile('42'), undefined);
   assert.equal(await nocoProfileSource(seeded([row({ id: 'has spaces' })]), new Map()).profile('42'), undefined);
   assert.equal(await nocoProfileSource(seeded([row({ prompt: '' })]), new Map()).profile('42'), undefined);
   assert.equal(await nocoProfileSource(seeded([row({ prompt: 'x'.repeat(12001) })]), new Map()).profile('42'), undefined);

@@ -2,6 +2,7 @@ import { Room, RoomEvent } from '@livekit/rtc-node';
 import { signAccessToken } from '../livekit/token.js';
 import { exact, object } from './contract.js';
 import type { BootstrapAuthority } from './authority.js';
+import type { Logger } from '../logging/logger.js';
 
 export interface RoomMonitor {
   start(callId: string, deadline: number): Promise<void>;
@@ -12,7 +13,9 @@ export interface RoomMonitor {
 export class AgentMonitor implements RoomMonitor {
   private readonly rooms = new Map<string, { room: Room; timer: NodeJS.Timeout; busy: boolean; deadline: number; conversation: boolean }>();
   constructor(private readonly opts: { authority: BootstrapAuthority; url: string; apiKey: string; apiSecret: string;
-    fallback: (id: string) => Promise<void>; roomFactory?: () => Room }) {}
+    fallback: (id: string) => Promise<void>; roomFactory?: () => Room;
+    /** Diagnoses connect/fallback failures. LiveKit errors carry no profile or credential text. */
+    logger?: Pick<Logger, 'warn'> }) {}
   isMonitoring(id: string): boolean { return this.rooms.has(id); }
   async start(id: string, deadline: number): Promise<void> {
     if (this.rooms.has(id)) return;
@@ -40,7 +43,12 @@ export class AgentMonitor implements RoomMonitor {
       try { await Promise.race([room.connect(this.opts.url, token, { autoSubscribe: false, dynacast: false }).then(async () => { if (!this.rooms.has(id)) await room.disconnect(); }),
         new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error('monitor unavailable')), 5000); })]); }
       finally { if (timeout) clearTimeout(timeout); }
-    } catch { await this.stop(id); throw new Error('monitor unavailable'); }
+    } catch (error) {
+      this.opts.logger?.warn('monitor room connection failed', { callSessionId: id,
+        error: error instanceof Error ? error.name : 'unknown',
+        detail: error instanceof Error ? error.message.slice(0, 200) : undefined });
+      await this.stop(id); throw new Error('monitor unavailable');
+    }
   }
   async ready(id: string, bytes: Uint8Array, identity: string, sid: string): Promise<void> {
     let value: Record<string, unknown>;
@@ -89,8 +97,10 @@ export class AgentMonitor implements RoomMonitor {
     if (!this.rooms.has(id)) return;
     // Telephony fallback must run even when diagnostics storage is unavailable.
     await this.opts.authority.opts.store.transition(id, 'fallback', 'agent-fallback').catch(() => {});
-    await this.opts.fallback(id);
-    await this.stop(id);
+    try { await this.opts.fallback(id); }
+    catch (error) {
+      this.opts.logger?.warn('telephony fallback failed', { callSessionId: id, error: error instanceof Error ? error.name : 'unknown' });
+    } finally { await this.stop(id); }
   }
   async stop(id: string): Promise<void> {
     const entry = this.rooms.get(id); if (!entry) return;

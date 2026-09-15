@@ -226,6 +226,21 @@ test('watchdog and storage failure both preserve telephony fallback', async t =>
     await new Promise(r => setTimeout(r, 1100)); assert.equal(fallback, 1);
   }
 });
+test('a failing telephony fallback still releases the room and its watchdog timer', async t => {
+  // A leaked monitor keeps polling LiveKit every second for the life of the
+  // process, which starves later calls' room connections until a restart.
+  const h = setup(); const room = new FakeRoom(); let attempts = 0;
+  const monitor = new AgentMonitor({ authority: h.authority, url: 'wss://unused', apiKey: 'x', apiSecret: 'x',
+    fallback: async () => { attempts++; throw new Error('ARI channel is gone'); }, roomFactory: () => room as unknown as Room });
+  t.after(() => monitor.close());
+  await monitor.start(id, Date.now() - 1);
+  assert.equal(monitor.isMonitoring(id), true);
+  await new Promise(r => setTimeout(r, 1100));
+  assert.equal(attempts, 1);
+  assert.equal(monitor.isMonitoring(id), false, 'the room must be released even though fallback threw');
+  await new Promise(r => setTimeout(r, 1100));
+  assert.equal(attempts, 1, 'the watchdog timer must not keep firing after release');
+});
 test('ARI fallback redirects caller, clears only AI legs, and preserves human bridges', async () => {
   const ari = new FakeAri(); const events = new FakeEventSink();
   const manager = new TakeoverManager({ ari, events, logger: captureLogger().logger, drainTimeoutMs: 100, defaultRingTimeoutSeconds: 10, defaultMohClass: 'default', livekitTrunkEndpoint: 'livekit',

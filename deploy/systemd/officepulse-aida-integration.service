@@ -1,0 +1,28 @@
+[Unit]
+Description=OfficePulse integration API and native PBX inventory
+After=network-online.target mariadb.service asterisk.service
+Wants=network-online.target
+Requires=mariadb.service
+[Service]
+Type=simple
+User=officepulse-aida
+Group=officepulse-aida
+WorkingDirectory=/opt/officepulse-aida-integration
+EnvironmentFile=/etc/officepulse-aida-integration.env
+ExecStart=/usr/bin/node /opt/officepulse-aida-integration/dist/index.js
+Restart=always
+RestartSec=2
+TimeoutStopSec=15
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+# AF_NETLINK is required: libwebrtc (@livekit/rtc-node) enumerates network
+# interfaces over netlink while gathering ICE candidates. Without it only the
+# first room connection in the process succeeds; later ones hang (issue #19).
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+MemoryMax=512M
+[Install]
+WantedBy=multi-user.target

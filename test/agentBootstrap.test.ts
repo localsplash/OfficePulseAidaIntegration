@@ -8,7 +8,8 @@ import type { Admission, AdmissionStore } from '../src/agent/store.js';
 import { BootstrapAuthority, type AgentLiveKit, type Participant } from '../src/agent/authority.js';
 import { NativeCallOrchestrator } from '../src/agent/orchestrator.js';
 import { AgentMonitor } from '../src/agent/monitor.js';
-import { NativeAdmissionAuthority } from '../src/agent/native.js';
+import { NativeAdmissionAuthority, identityTenantEnabled } from '../src/agent/native.js';
+import { AgentConfigCache, nocoProfileSource, type CachedProfile } from '../src/agent/profileCache.js';
 import { agentConfig } from '../src/agent/config.js';
 import { FakeRuntimeStore } from './helpers/fakeRuntime.js';
 import { FakeNocoApi } from './helpers/fakeCloud.js';
@@ -19,6 +20,7 @@ import { HttpApi, publicApiOptions } from '../src/http/httpServer.js';
 import { Readiness } from '../src/readiness.js';
 import { didDialplanRows } from '../src/pbx/managedDid.js';
 
+class FakeRoom extends EventEmitter { async connect() {} async disconnect() {} }
 const fixture = JSON.parse(readFileSync(new URL('./fixtures/bootstrap-v1.json', import.meta.url), 'utf8'));
 const id: string = fixture.dispatch.callSessionId;
 class MemoryAdmissions implements AdmissionStore {
@@ -108,21 +110,85 @@ test('bootstrap HTTP is credential authenticated on public listener and never lo
   assert.equal((await fetch(url, request)).status, 503);
   assert.ok(!lines.join('').includes(fixture.dispatch.bootstrapToken)); assert.ok(!lines.join('').includes(fixture.response.profileSnapshot.prompt));
 });
-test('native authority requires exact managed DID, unique queue ownership and enabled profile/tenant', async () => {
+const DID: string = fixture.response.profileSnapshot.didE164;
+const ownershipQuery = async (sql: string) => sql.includes('SELECT priority')
+  ? didDialplanRows(DID, { queue: 'queue42', ringsBeforeAi: 3 }) as unknown as Record<string, unknown>[]
+  : sql.includes('SELECT name') ? [{ name: 'queue42' }] : [];
+const SCOPES = new Map([['42', { contexts: ['tenant42'], queueNames: ['queue42'], didContext: 'ingress' }]]);
+const CACHED: CachedProfile = { profileId: 'profile42', profileRevision: 1, businessName: 'Office', prompt: 'Help callers' };
+
+test('native authority uses Asterisk route ownership and the cached profile, never a call-path config read', async () => {
+  const cached = new Map([['42', { ...CACHED }]]);
+  const authority = new NativeAdmissionAuthority({ scopes: SCOPES, query: ownershipQuery, profiles: { get: tenant => cached.get(tenant) } });
+  const request = { didE164: DID, ingressContext: 'ingress', fallbackQueue: 'queue42' };
+  const resolved = await authority.resolve(request, id);
+  assert.equal(resolved?.tenantId, '42'); assert.equal(resolved?.profileId, 'profile42'); assert.equal(resolved?.queue, 'queue42');
+  assert.equal(resolved?.profile.businessName, 'Office'); assert.equal(resolved?.profile.didE164, DID);
+  assert.equal(await authority.resolve({ ...request, fallbackQueue: 'other' }, id), undefined);
+  assert.equal(await authority.resolve({ ...request, ingressContext: 'elsewhere' }, id), undefined);
+  assert.equal(await authority.authorized('42', DID, 'queue42', 'profile42'), true);
+  assert.equal(await authority.authorized('42', DID, 'queue42', 'replaced-profile'), false);
+  assert.equal(await authority.authorized('42', DID, 'other', 'profile42'), false);
+  // A revocation observed by the last background refresh still fails closed.
+  cached.delete('42');
+  assert.equal(await authority.resolve(request, id), undefined);
+  assert.equal(await authority.authorized('42', DID, 'queue42', 'profile42'), false);
+});
+test('once configuration is cached, admission, credential consumption and monitoring issue no Identity/NocoDB request', async t => {
   const noco = new FakeNocoApi();
   noco.seed('aida_tbl_AssistantProfile', [{ id: 'profile42', revision: 1, iTenantId: 42, enabled: true, business_name: 'Office', prompt: 'Help callers' }]);
-  const scope = { contexts: ['tenant42'], queueNames: ['queue42'], didContext: 'ingress' };
-  const query = async (sql: string) => sql.includes('SELECT priority') ? didDialplanRows(fixture.response.profileSnapshot.didE164, { queue: 'queue42', ringsBeforeAi: 3 }) as unknown as Record<string, unknown>[] : sql.includes('SELECT name') ? [{ name: 'queue42' }] : [];
-  const opts = { scopes: new Map([['42', scope]]), query, noco, tenantEnabled: async () => true, profileIds: new Map<string,string>() };
-  const authority = new NativeAdmissionAuthority(opts);
-  const request = { didE164: fixture.response.profileSnapshot.didE164, ingressContext: 'ingress', fallbackQueue: 'queue42' };
-  assert.equal((await authority.resolve(request, id))?.tenantId, '42');
-  assert.equal(await authority.resolve({ ...request, fallbackQueue: 'other' }, id), undefined);
-  opts.tenantEnabled = async () => false; assert.equal(await authority.resolve(request, id), undefined);
-  opts.tenantEnabled = async () => true;
-  noco.tables.get('aida_tbl_AssistantProfile')!.push({ ...noco.tables.get('aida_tbl_AssistantProfile')![0], id: 'other' });
-  assert.equal(await authority.resolve(request, id), undefined);
-  opts.profileIds.set('42', 'profile42'); assert.ok(await authority.resolve(request, id));
+  const cache = new AgentConfigCache({ tenantIds: ['42'], source: nocoProfileSource(noco, new Map()) });
+  assert.equal(await cache.refresh(), true);
+  assert.equal(cache.status().complete, true);
+
+  // Both configuration services now fail; a call in flight must not notice.
+  const reads = noco.calls.length;
+  noco.failOn = '*';
+  const attempted: string[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: unknown) => { attempted.push(String(input)); throw new Error('configuration service unavailable'); }) as typeof fetch;
+  t.after(() => { globalThis.fetch = realFetch; });
+
+  const native = new NativeAdmissionAuthority({ scopes: SCOPES, query: ownershipQuery, profiles: cache });
+  const runtime = new FakeRuntimeStore(); const store = new MemoryAdmissions();
+  const participants: Participant[] = [];
+  let dispatched: { callSessionId: string; bootstrapToken: string } | undefined;
+  const livekit: AgentLiveKit = { listParticipants: async () => participants, dispatchIdentity: async () => 'agent-1',
+    dispatchAgent: async (_room, metadata) => { dispatched = metadata; return 'dispatch42'; }, createRoom: async () => {} };
+  const authority = new BootstrapAuthority({ store, runtime, native, livekit, routeAttribute: 'sip.aidaRouteToken', instanceId: 'op-test' });
+  const orchestrator = new NativeCallOrchestrator({ runtime, store, native, livekit,
+    monitor: { start: async () => {}, stop: async () => {}, close: async () => {} },
+    instanceId: 'op-test', startupTimeoutMs: 30000, available: () => true });
+
+  const decision = await orchestrator.bootstrapInboundCall({ officePulseInstanceId: 'op-test', asteriskLinkedId: 'linked-19',
+    asteriskChannelId: 'ch-19', callerNumber: '15551230001', didE164: DID, ingressContext: 'ingress', fallbackQueue: 'queue42' });
+  assert.equal(decision.disposition, 'SCREEN');
+  const call = decision.callSessionId!;
+  // Asterisk's context, DID and CID all survive into the durable call record.
+  const record = await runtime.getCallSession(call);
+  assert.equal(record?.didE164, DID); assert.equal(record?.callerNumber, '15551230001');
+  assert.equal(record?.destinationId, 'queue42'); assert.equal(record?.config.profileId, 'profile42');
+  assert.deepEqual(runtime.events.get(call)?.[0], { eventType: 'call-arrived', payload: { ingressContext: 'ingress', queue: 'queue42', callerIdPresent: true },
+    sequenceNumber: 1, createdAt: runtime.events.get(call)![0]!.createdAt });
+
+  participants.push({ sid: 'PA_sip', identity: 'sip-caller', kind: 3, attributes: { 'sip.aidaRouteToken': decision.routeToken! } },
+    { sid: 'PA_agent', identity: 'agent-1', kind: 4 });
+  const admitted = await authority.authorize(call, dispatched!.bootstrapToken, { roomName: decision.roomName!,
+    sipParticipantIdentity: 'sip-caller', sipParticipantSid: 'PA_sip', routeToken: decision.routeToken! });
+  assert.equal(admitted.profileSnapshot.prompt, 'Help callers');
+  assert.equal(admitted.profileSnapshot.callSessionId, call);
+
+  const room = new FakeRoom();
+  const monitor = new AgentMonitor({ authority, url: 'wss://unused', apiKey: 'x', apiSecret: 'x', fallback: async () => {}, roomFactory: () => room as unknown as Room });
+  t.after(() => monitor.close());
+  await monitor.start(call, Date.now() + 30000);
+  await monitor.ready(call, Buffer.from(JSON.stringify({ type: 'aida.event.agent_ready', schemaVersion: 1,
+    callSessionId: call, agentIdentity: 'agent-1', agentParticipantSid: 'PA_agent' })), 'agent-1', 'PA_agent');
+  assert.equal(store.rows.get(call)?.status, 'ready');
+  await new Promise(r => setTimeout(r, 1100)); // at least one watchdog authorization pass
+  assert.equal(store.rows.get(call)?.status, 'ready');
+  assert.deepEqual(attempted, [], 'no HTTP request may leave the call path');
+  assert.equal(noco.calls.length, reads, 'PlatformConfig is read only by startup and background refresh');
 });
 test('dispatch contains only v1 credentials and SIP routing returns before agent readiness', async () => {
   const h = setup(); h.runtime.sessions.clear(); h.store.rows.clear(); const order: string[] = []; let metadata: any;
@@ -140,7 +206,6 @@ test('dispatch contains only v1 credentials and SIP routing returns before agent
   assert.ok(!JSON.stringify([...h.store.rows.values()]).includes(metadata.bootstrapToken));
   assert.equal((await o.bootstrapInboundCall(request)).disposition, 'FALLBACK'); assert.equal(order.length, 3);
 });
-class FakeRoom extends EventEmitter { async connect() {} async disconnect() {} }
 test('ready is verified separately from join; transcript persistence is metadata only; loss falls back', async t => {
   const h = setup(); await h.authority.authorize(id, fixture.dispatch.bootstrapToken, fixture.request);
   const room = new FakeRoom(); let fallback = 0;
@@ -178,8 +243,29 @@ test('admission is opt-in and rejects incomplete/ambiguous configuration', () =>
   assert.throws(() => agentConfig({ NATIVE_ADMISSION_ENABLED: 'true' }));
   const env = { FASTAGI_BIND: '127.0.0.1', NATIVE_ADMISSION_ENABLED: 'true', VOICE_ENABLED: 'true', PBX_INVENTORY_ENABLED: 'true', LIVEKIT_AGENT_NAME: 'aida-prime-bootstrap-dev', LIVEKIT_TRUNK_ENDPOINT: 'livekit', ID_BASE_URL: 'https://id.example.test' };
   assert.equal(agentConfig(env)?.startupTimeoutMs, 30000);
+  assert.equal(agentConfig({ ...env, OPS_IDENTITY_CLIENT_SECRET: 'shared-secret' })?.identitySecret, 'shared-secret');
+  assert.equal(agentConfig({ ...env, ID_CLIENT_SECRET: 'native-secret', OPS_IDENTITY_CLIENT_SECRET: 'shared-secret' })?.identitySecret, 'native-secret');
+  assert.equal(agentConfig(env)?.configRefreshMs, 300000);
+  assert.equal(agentConfig(env)?.identityTenantCheck, false);
+  assert.equal(agentConfig({ ...env, AGENT_CONFIG_REFRESH_SECONDS: '60', AGENT_IDENTITY_TENANT_CHECK: 'true' })?.configRefreshMs, 60000);
+  assert.equal(agentConfig({ ...env, AGENT_IDENTITY_TENANT_CHECK: 'true' })?.identityTenantCheck, true);
+  assert.throws(() => agentConfig({ ...env, AGENT_CONFIG_REFRESH_SECONDS: '5' }));
+  assert.throws(() => agentConfig({ ...env, AGENT_IDENTITY_TENANT_CHECK: 'yes' }));
   assert.throws(() => agentConfig({ ...env, LIVEKIT_AGENT_NAME: 'aida-prime' }));
   assert.throws(() => agentConfig({ ...env, ID_BASE_URL: 'https://id.example.test/path' }));
+});
+test('the background Identity check authenticates and logs rejections without the credential', async () => {
+  const seen: RequestInit[] = [];
+  const messages: unknown[] = [];
+  const enabled = identityTenantEnabled('https://id.example.test', {
+    clientSecret: 'do-not-log',
+    fetchImpl: async (_url, init) => { seen.push(init ?? {}); return new Response('{"error":"Forbidden"}', { status: 403 }); },
+    logger: { warn: (message, fields) => { messages.push({ message, fields }); } },
+  });
+  await assert.rejects(() => enabled('42'), /Identity runtime unavailable/);
+  assert.equal((seen[0]!.headers as Record<string, string>)['X-Id-Client-Secret'], 'do-not-log');
+  assert.deepEqual(messages, [{ message: 'Identity tenant validation request failed', fields: { tenantId: '42', status: 403 } }]);
+  assert.doesNotMatch(JSON.stringify(messages), /do-not-log|Forbidden/);
 });
 test('caller completion is tracked even if bootstrap fails before Stasis', async () => {
   const ari = new FakeAri(); const events = new FakeEventSink(); let completed = false;

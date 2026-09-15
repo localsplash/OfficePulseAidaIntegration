@@ -2,6 +2,7 @@ import { digest, sameHash } from './agent/contract.js';
 import { agentConfig } from './agent/config.js';
 import { MysqlAdmissionStore } from './agent/store.js';
 import { mysqlNativeAuthority, identityTenantEnabled } from './agent/native.js';
+import { AgentConfigCache, nocoProfileSource } from './agent/profileCache.js';
 import { BootstrapAuthority } from './agent/authority.js';
 import { AgentMonitor } from './agent/monitor.js';
 import { NativeCallOrchestrator } from './agent/orchestrator.js';
@@ -59,8 +60,15 @@ async function main(): Promise<void> {
   const ari = new AriClient({ ...config.ari, logger: logger.child({ component: 'ari' }),
     onConnectionState: (connected) => readiness.set('ari', connected) });
   const admissions = agent ? new MysqlAdmissionStore(config.runtimeMysql) : undefined;
-  const native = agent ? mysqlNativeAuthority(config.pbxInventoryMysql!, { scopes: config.pbxInventoryScopes, noco,
-    tenantEnabled: identityTenantEnabled(agent.identityOrigin), profileIds: agent.profileIds }) : undefined;
+  // Business configuration is loaded here, once, and refreshed on its own timer.
+  // Admission, credential consumption and monitoring only read the cache (#19).
+  const profiles = agent ? new AgentConfigCache({ tenantIds: [...config.pbxInventoryScopes.keys()],
+    source: nocoProfileSource(noco, agent.profileIds), refreshMs: agent.configRefreshMs,
+    logger: logger.child({ component: 'agent-config' }),
+    ...(agent.identityTenantCheck ? { tenantEnabled: identityTenantEnabled(agent.identityOrigin,
+      { clientSecret: agent.identitySecret, logger: logger.child({ component: 'identity' }) }) } : {}) }) : undefined;
+  if (agent) readiness.register('agent-config-cache', 'degraded', false, 'Agent business configuration has not been loaded');
+  const native = agent && profiles ? mysqlNativeAuthority(config.pbxInventoryMysql!, { scopes: config.pbxInventoryScopes, profiles }) : undefined;
   const authority = agent && admissions && native ? new BootstrapAuthority({ store: admissions, runtime,
     native: native.authority, livekit, routeAttribute: agent.routeAttribute, instanceId: config.officePulseInstanceId }) : undefined;
   let monitor: AgentMonitor | undefined;
@@ -109,6 +117,13 @@ async function main(): Promise<void> {
   const privateApi = new HttpApi(options);
   // Public routes authenticate with a webhook signature or one-time Agent credentials.
   const publicApi = new HttpApi({ ...publicApiOptions(options), documentation: true });
+  if (profiles) {
+    // Startup load: a failure is not fatal — calls fall back to the PBX queue
+    // until a later refresh succeeds, and readiness reports the gap.
+    const loaded = await profiles.refresh().catch(() => false);
+    logger.info('agent business configuration load attempted', { ...profiles.status(), loaded });
+    profiles.start();
+  }
   await privateApi.listen(config.http.port, config.http.bind);
   await publicApi.listen(config.http.publicPort, config.http.bind);
   const operations = opsConfig ? new OperationsServer(opsConfig, {
@@ -142,8 +157,16 @@ async function main(): Promise<void> {
       const connected = await provisioner.ping();
       readiness.set('pbx-provisioning', connected, connected ? 'Provisioning database available; effective Asterisk state is not verified' : 'Provisioning database unavailable');
     }
+    if (profiles) {
+      const status = profiles.status();
+      // Keep the detail stable across refreshes so readiness observers record transitions, not heartbeats.
+      readiness.set('agent-config-cache', status.complete, status.complete
+        ? `Cached assistant configuration for ${status.loadedTenants.length} mapped tenant(s); calls do not read PlatformConfig or Identity`
+        : `Cached ${status.loadedTenants.length}/${status.configuredTenants} tenant(s); calls for uncached tenants fall back to the PBX queue`);
+    }
     const components = readiness.snapshot().components;
-    readiness.set('native-pbx-admission', !!agent && config.pbxInventoryScopes.size > 0 && ['runtime-mysql','nocodb','ari','livekit','pbx-inventory'].every(key => components[key]?.ready === true),
+    // NocoDB/Identity availability no longer gates admission: the cache does.
+    readiness.set('native-pbx-admission', !!agent && config.pbxInventoryScopes.size > 0 && ['runtime-mysql','ari','livekit','pbx-inventory','agent-config-cache'].every(key => components[key]?.ready === true),
       agent ? 'Admission implementation configured; real-call acceptance is separate' : 'Native agent admission is disabled');
   };
   await probe();
@@ -155,6 +178,7 @@ async function main(): Promise<void> {
     if (closing) return;
     closing = true;
     clearInterval(timer);
+    profiles?.stop();
     ari.stop();
     void Promise.allSettled([fastAgi.close(), privateApi.close(), publicApi.close(), operations?.close(), monitor?.close(), admissions?.close(), native?.close(), runtime.close(), inventory?.close(), provisioner?.close()]).then(() => process.exit(0));
     setTimeout(() => process.exit(1), 10000).unref();

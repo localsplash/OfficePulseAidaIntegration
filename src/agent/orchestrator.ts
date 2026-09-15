@@ -35,7 +35,10 @@ export class NativeCallOrchestrator implements BootstrapDecider {
       id = candidate;
       if (r.asteriskChannelId) this.opts.observeCaller?.(id, r.asteriskChannelId);
       withinSetup();
-      await this.opts.runtime.appendCallEvent(id, { eventType: 'call-arrived' });
+      // Sanitized evidence that Asterisk's own context/DID/CID reached bootstrap.
+      // CID digits stay in the dedicated call_session column, never in event payloads.
+      await this.opts.runtime.appendCallEvent(id, { eventType: 'call-arrived',
+        payload: { ingressContext: r.ingressContext ?? null, queue: native.queue, callerIdPresent: r.callerNumber !== undefined } });
       const bootstrapToken = credential(); const routeToken = credential();
       const deadline = Date.now() + this.opts.startupTimeoutMs;
       await this.opts.store.create({ callId: id, tenantId: native.tenantId, roomName, instanceId: r.officePulseInstanceId,

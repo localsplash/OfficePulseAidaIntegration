@@ -58,6 +58,10 @@ admission reads only the selected enabled assistant profile for a pinned call sn
 | `PBX_INVENTORY_TENANTS_JSON` | no mappings | Reviewed tenant contexts, queues and managed-DID ingress context; legacy `didNumbers` values are ignored by DID authorization |
 | `PBX_PROVISIONING_ENABLED` | false | Register the POC PBX mutation routes |
 | `PBX_PROVISIONING_MYSQL_USER`, `PBX_PROVISIONING_MYSQL_PASSWORD` | required when enabled | Dedicated Realtime writer account |
+| `NATIVE_ADMISSION_ENABLED` | false | Opt in to native Agent bootstrap; see `docs/AGENT_BOOTSTRAP.md` |
+| `AGENT_PROFILE_IDS_JSON` | no selection | Pins one assistant profile per tenant when several are enabled |
+| `AGENT_CONFIG_REFRESH_SECONDS` | 300 (range 30–3600) | Background refresh of the cached profiles; never a call-path timeout |
+| `AGENT_IDENTITY_TENANT_CHECK` | false | Consult Identity's runtime tenant check during refresh only, never during a call |
 
 `VOICE_ENABLED=false` is the canonical development setting. With voice enabled,
 `ARI_URL`, `ARI_USERNAME`, `ARI_PASSWORD`, `LIVEKIT_URL`, `LIVEKIT_API_KEY`,
@@ -65,8 +69,9 @@ admission reads only the selected enabled assistant profile for a pinned call sn
 `OFFICEPULSE_INSTANCE_ID` identifies this service. `FASTAGI_PORT` defaults to 4573,
 `FASTAGI_BIND` to 0.0.0.0. Existing takeover timing/MOH and optional Pusher settings
 remain supported. PBX writer credentials are required only when its opt-in flag
-is enabled; Device admission remains separate. Native Agent admission requires its Identity
-runtime check and the opt-in settings in the bootstrap runbook.
+is enabled; Device admission remains separate. Native Agent admission uses the opt-in
+settings in the bootstrap runbook; it loads assistant profiles at startup and refreshes
+them in the background, so admission and active calls issue no Identity or NocoDB request.
 
 Readiness reports runtime MySQL and NocoDB as critical, and PBX inventory as a
 separate degraded component when not configured/unavailable. ARI is critical

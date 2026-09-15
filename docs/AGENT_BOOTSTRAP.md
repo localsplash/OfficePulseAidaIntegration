@@ -160,8 +160,12 @@ resolver; this issue does not enable its separate Admin command.
    enumerates network interfaces over netlink while gathering ICE candidates.
    Without it the first room connection in the process succeeds and every later
    one hangs until the monitor's bound expires, so exactly one call per restart
-   reaches the Agent and the rest fall back at `monitor-connect`. See
-   `deploy/systemd/aida-integration.service`.
+   reaches the Agent and the rest fall back at `monitor-connect`.
+   `deploy/systemd/officepulse-aida-integration.service` is a byte-identical
+   copy of the unit installed on the OfficePulse PBX host, so
+   `diff` against `/etc/systemd/system/` detects drift; the older generic
+   `deploy/systemd/aida-integration.service` carries the same setting for
+   deployments that use its name, user and paths.
 6. Exclude bootstrap request/response bodies, authorization headers, SIP route
    attributes and dispatch metadata from proxy/tracing logs. Disable Asterisk
    AGI debug, SIP packet logging, and verbose dialplan logging for this path:

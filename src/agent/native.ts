@@ -2,9 +2,10 @@ import mysql from 'mysql2/promise';
 import type { PbxTenantScopes, InventoryQuery } from '../pbx/inventory.js';
 import { PbxInventoryReader } from '../pbx/inventory.js';
 import { recognizeDidRows } from '../pbx/managedDid.js';
-import type { NocoReadApi } from '../nocodb/api.js';
 import type { RuntimeMysqlConfig } from '../runtime/mysqlRuntimeStore.js';
-import { profileSnapshot, type ProfileSnapshot } from './contract.js';
+import type { Logger } from '../logging/logger.js';
+import { cachedProfileSnapshot, type ProfileLookup } from './profileCache.js';
+import type { ProfileSnapshot } from './contract.js';
 
 export interface NativeRequest { didE164: string; ingressContext: string; fallbackQueue: string }
 export interface NativeResolution { tenantId: string; queue: string; profileId: string; profileRevision: number; profile: ProfileSnapshot }
@@ -12,10 +13,14 @@ export interface NativeAuthority {
   resolve(request: NativeRequest, callId: string): Promise<NativeResolution | undefined>;
   authorized(tenantId: string, did: string, queue: string, profileId: string): Promise<boolean>;
 }
+/**
+ * Route ownership comes from Asterisk's own Realtime rows on this PBX host;
+ * business configuration comes from the startup-loaded cache. Neither path
+ * performs an Identity or NocoDB request while a call is in progress (#19).
+ */
 export class NativeAdmissionAuthority implements NativeAuthority {
   private readonly inventory: PbxInventoryReader;
-  constructor(private readonly opts: { scopes: PbxTenantScopes; query: InventoryQuery; noco: NocoReadApi;
-    tenantEnabled: (tenantId: string) => Promise<boolean>; profileIds: ReadonlyMap<string, string> }) {
+  constructor(private readonly opts: { scopes: PbxTenantScopes; query: InventoryQuery; profiles: ProfileLookup }) {
     this.inventory = new PbxInventoryReader(opts.query, true);
   }
   private async owned(tenantId: string, did: string, queue: string): Promise<boolean> {
@@ -26,9 +31,9 @@ export class NativeAdmissionAuthority implements NativeAuthority {
     return settings?.queue === queue && (await this.inventory.queues(scope)).some(q => q.id === queue);
   }
   async authorized(tenantId: string, did: string, queue: string, profileId: string): Promise<boolean> {
-    if (!await this.opts.tenantEnabled(tenantId) || !await this.owned(tenantId, did, queue)) return false;
-    const rows = await this.opts.noco.listRecords('aida_tbl_AssistantProfile', [{ field: 'iTenantId', op: 'eq', value: Number(tenantId) }, { field: 'id', op: 'eq', value: profileId }], 2);
-    return rows.length === 1 && String(rows[0]!.iTenantId) === tenantId && [true, 1, '1'].includes(rows[0]!.enabled as boolean);
+    const entry = this.opts.profiles.get(tenantId);
+    if (!entry || entry.profileId !== profileId) return false;
+    return this.owned(tenantId, did, queue);
   }
   async resolve(request: NativeRequest, callId: string): Promise<NativeResolution | undefined> {
     if (!/^\+[1-9][0-9]{6,14}$/.test(request.didE164) || !/^[a-zA-Z0-9_.-]{1,40}$/.test(request.ingressContext) || !/^[a-zA-Z0-9_.-]{1,60}$/.test(request.fallbackQueue)) return;
@@ -36,21 +41,11 @@ export class NativeAdmissionAuthority implements NativeAuthority {
     for (const [id, scope] of this.opts.scopes) if (scope.didContext === request.ingressContext && await this.owned(id, request.didE164, request.fallbackQueue)) matches.push(id);
     if (matches.length !== 1) return;
     const tenantId = matches[0]!;
-    if (!await this.opts.tenantEnabled(tenantId)) return;
-    const selected = this.opts.profileIds.get(tenantId);
-    const rows = await this.opts.noco.listRecords('aida_tbl_AssistantProfile', [
-      { field: 'iTenantId', op: 'eq', value: Number(tenantId) }, ...(selected ? [{ field: 'id', op: 'eq' as const, value: selected }] : []),
-      { field: 'enabled', op: 'eq', value: true },
-    ], 2);
-    if (rows.length !== 1) return; // multiple enabled profiles require an explicit selection
-    const r = rows[0]!;
-    if (String(r.iTenantId) !== tenantId || ![true, 1, '1'].includes(r.enabled as boolean) || !/^[A-Za-z0-9_.-]{1,60}$/.test(String(r.id)) || !Number.isSafeInteger(Number(r.revision))) return;
-    const profile = profileSnapshot({ schemaVersion: 1, callSessionId: callId, tenantId, didE164: request.didE164,
-      businessName: r.business_name, prompt: r.prompt, locale: 'en-US',
-      ...Object.fromEntries(Object.entries({ tone: r.tone, objective: r.objective, openingStatement: r.opening_statement,
-        transferStatement: r.transfer_statement, failedTransferStatement: r.failed_transfer_statement }).filter(([, v]) => v !== undefined && v !== null)),
-    });
-    return { tenantId, queue: request.fallbackQueue, profileId: String(r.id), profileRevision: Number(r.revision), profile };
+    const entry = this.opts.profiles.get(tenantId);
+    if (!entry) return; // configuration was never loaded, or was revoked at the last refresh
+    let profile: ProfileSnapshot;
+    try { profile = cachedProfileSnapshot(entry, { callSessionId: callId, tenantId, didE164: request.didE164 }); } catch { return; }
+    return { tenantId, queue: request.fallbackQueue, profileId: entry.profileId, profileRevision: entry.profileRevision, profile };
   }
 }
 export function mysqlNativeAuthority(config: RuntimeMysqlConfig, opts: Omit<ConstructorParameters<typeof NativeAdmissionAuthority>[0], 'query'>) {
@@ -59,12 +54,36 @@ export function mysqlNativeAuthority(config: RuntimeMysqlConfig, opts: Omit<Cons
     const [rows] = await pool.execute<mysql.RowDataPacket[]>({ sql, timeout: 4000 }, values); return rows;
   } }), close: () => pool.end() };
 }
-export function identityTenantEnabled(origin: string, fetchImpl = fetch) {
+export interface IdentityTenantOptions {
+  clientSecret?: string;
+  fetchImpl?: typeof fetch;
+  logger?: Pick<Logger, 'warn'>;
+}
+/** Startup/background only. Never called while a call is being admitted or monitored. */
+export function identityTenantEnabled(origin: string, options: IdentityTenantOptions = {}) {
+  const fetchImpl = options.fetchImpl ?? fetch;
   return async (id: string): Promise<boolean> => {
-    const response = await fetchImpl(new URL(`/api/runtime/tenants/${id}`, origin), { redirect: 'error', signal: AbortSignal.timeout(3000) });
+    let response: Response;
+    try {
+      response = await fetchImpl(new URL(`/api/runtime/tenants/${id}`, origin), {
+        headers: options.clientSecret ? { 'X-Id-Client-Secret': options.clientSecret } : {},
+        redirect: 'error', signal: AbortSignal.timeout(3000),
+      });
+    } catch {
+      options.logger?.warn('Identity tenant validation request failed', { tenantId: id, status: 'network_error' });
+      throw new Error('Identity runtime unavailable');
+    }
     if (response.status === 404) return false;
-    if (!response.ok) throw new Error('Identity runtime unavailable');
-    const body = await response.json() as { iTenantId?: unknown; bEnabled?: unknown };
+    if (!response.ok) {
+      options.logger?.warn('Identity tenant validation request failed', { tenantId: id, status: response.status });
+      throw new Error('Identity runtime unavailable');
+    }
+    let body: { iTenantId?: unknown; bEnabled?: unknown };
+    try { body = await response.json() as typeof body; }
+    catch {
+      options.logger?.warn('Identity tenant validation response was invalid', { tenantId: id, status: response.status });
+      throw new Error('Identity runtime unavailable');
+    }
     return String(body.iTenantId) === id && body.bEnabled === true;
   };
 }

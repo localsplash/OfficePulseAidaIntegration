@@ -13,7 +13,9 @@ const source = new URL('../asterisk/extensions_aida.conf', import.meta.url);
 test('managed DID include has one versioned native path, validation, recording guard and bounded LiveKit fallback', async () => {
   const include = (await readFile(source, 'utf8')).split('[aida-managed-did-v1]')[1]!.split('\n[')[0]!;
   assert.ok(include);
-  for (const instruction of ['${ARGC} != 6', 'GotoIfTime(${ARG4},${ARG5},*,*,${ARG6}?queue:livekit)', 'Queue(${ARG1},r,,,$[${ARG2} * 5])', 'Dial(PJSIP/${ARG3}@livekit,60)', 'Hangup(21)', 'MIXMONITOR_FILENAME', 'CDR(userfield)', 'officepulse-recording']) assert.ok(include.includes(instruction), instruction);
+  for (const instruction of ['${ARGC} != 6', 'GotoIfTime(${ARG4},${ARG5},*,*,${ARG6}?queue:livekit)', 'Queue(${ARG1},r,,,$[${ARG2} * 5])', 'Dial(PJSIP/${ARG3}@livekit,60)', 'Hangup(21)', 'MIXMONITOR_FILENAME', 'CDR(userfield)', 'officepulse-recording',
+    // Issue #19: the caller-side DID/context come from Asterisk's own row.
+    'STACK_PEEK(1,e,1)', 'STACK_PEEK(1,c,1)', 'Gosub(aida-agent-inbound-v1,s,1(${AIDA_AGENT_DID},${AIDA_AGENT_CONTEXT},${ARG1}))']) assert.ok(include.includes(instruction), instruction);
   assert.doesNotMatch(include, /AGI\(|System\(|Stasis\(|retell|Queue\([^\n]*,c/);
   assert.equal((include.match(/Dial\(/g) ?? []).length, 1);
 });
@@ -46,7 +48,7 @@ test('isolated Asterisk exercises schedule, answer, timeout and unavailable/malf
     ['answered', 'test-answer,1,+15555550101,*,*,UTC'],
     ['invalid', 'test-answer,0,+15555550101,*,*,UTC'],
     ['badzone', 'test-answer,1,+15555550101,00:00-23:59,mon,Unknown/Zone'],
-  ].map(([name, args]) => `exten => ${name},1,Set(AIDA_NATIVE_ADMISSION=${name === 'bootstrap-down' ? '1' : '0'})\n same => n,Set(AIDA_AGENT_DID=+15555550101)\n same => n,Set(AIDA_AGENT_CONTEXT=ingress)\n same => n,Gosub(aida-managed-did-v1,s,1(${args}))\n same => n,Hangup()`).join('\n') + '\n[pbx-test-agent]\nexten => answer,1,Answer()\n same => n,Wait(1)\n same => n,Hangup()\nexten => unanswered,1,Ringing()\n same => n,Wait(10)\n same => n,Hangup()\n[pbx-test-caller]\nexten => hold,1,Wait(2)\n same => n,Hangup()\n');
+  ].map(([name, args]) => `exten => ${name},1,Set(AIDA_NATIVE_ADMISSION=${name === 'bootstrap-down' ? '1' : '0'})\n same => n,Set(AIDA_AGENT_DID=+15555550101)\n same => n,Set(AIDA_AGENT_CONTEXT=ingress)\n same => n,Gosub(aida-managed-did-v1,s,1(${args}))\n same => n,Hangup()`).join('\n') + '\n[pbx-test-derived]\nexten => +15555550199,1,Set(AIDA_NATIVE_ADMISSION=1)\n same => n,Gosub(aida-managed-did-v1,s,1(test-answer,1,+15555550101,00:00-23:59,' + outside + ',UTC))\n same => n,Hangup()\n[pbx-test-agent]\nexten => answer,1,Answer()\n same => n,Wait(1)\n same => n,Hangup()\nexten => unanswered,1,Ringing()\n same => n,Wait(10)\n same => n,Hangup()\n[pbx-test-caller]\nexten => hold,1,Wait(2)\n same => n,Hangup()\n');
   const child = spawn(binary!, ['-f', '-n', '-vvv', '-C', cfg], { stdio: ['ignore', 'pipe', 'pipe'] });
   child.stdout.on('data', chunk => { output += String(chunk); });
   child.stderr.on('data', chunk => { output += String(chunk); });
@@ -56,10 +58,12 @@ test('isolated Asterisk exercises schedule, answer, timeout and unavailable/malf
   for (let i = 0; i < 60 && !output.includes('Asterisk Ready'); i++) { if (child.exitCode !== null) break; await delay(100); }
   assert.ok(output.includes('Asterisk Ready'), output);
   assert.match(await cli('dialplan show aida-managed-did-v1'), /GotoIfTime/);
-  for (const name of ['missing', 'inside', 'outside', 'timeout', 'answered', 'invalid', 'badzone', 'bootstrap-down']) {
+  for (const name of ['missing', 'inside', 'outside', 'timeout', 'answered', 'invalid', 'badzone', 'bootstrap-down', 'derived']) {
     const offset = output.length;
     const start = Date.now();
-    const commandResult = await cli(`channel originate Local/${name}@pbx-test extension hold@pbx-test-caller`);
+    // 'derived' dials an API-managed DID row that sets no AIDA_AGENT_* variable.
+    const origin = name === 'derived' ? 'Local/+15555550199@pbx-test-derived' : `Local/${name}@pbx-test`;
+    const commandResult = await cli(`channel originate ${origin} extension hold@pbx-test-caller`);
     assert.doesNotMatch(commandResult, /No such command|Unable|Failed/i);
     await delay(150);
     for (let i = 0; i < 100; i++) {
@@ -70,6 +74,11 @@ test('isolated Asterisk exercises schedule, answer, timeout and unavailable/malf
     assert.doesNotMatch(log, /No application|Function .* not registered|syntax error/i, log);
     if (name === 'invalid' || name === 'badzone') { assert.doesNotMatch(log, /Executing .* (Queue|Dial)\(/); assert.match(log, /Hangup\(.*"21"/); }
     else if (name === 'bootstrap-down') { assert.match(log, /AGI\(/); assert.match(log, /aida-agent-queue-fallback/); assert.match(log, /answered/); assert.doesNotMatch(log, /Dial\(.*PJSIP/); }
+    else if (name === 'derived') {
+      // The original context and DID survive into bootstrap with no hand edit.
+      assert.match(log, /aida-agent-inbound-v1,s,1\(\+15555550199,pbx-test-derived,test-answer\)/, log);
+      assert.match(log, /aida-agent-queue-fallback/); assert.match(log, /answered/); assert.doesNotMatch(log, /Dial\(.*PJSIP/);
+    }
     else if (name === 'answered') { assert.match(log, /answered/); assert.doesNotMatch(log, /Dial\(.*PJSIP/); }
     else {
       assert.match(log, /Dial\(.*PJSIP\/\+15555550101@livekit,60/);

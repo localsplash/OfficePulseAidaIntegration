@@ -1,4 +1,9 @@
-# Native Agent bootstrap v1 (issue #18)
+# Native Agent bootstrap v1 (issues #18, #19)
+
+Issue #19 completes the POC call path on top of #18: Asterisk's own context,
+DID and CID bootstrap the Agent, and business configuration is loaded and
+cached outside the call path. Admission, Agent credential consumption and
+active-call monitoring make no Identity or NocoDB request at all.
 
 This implementation matches AidaAgent `dev` commit
 `0c023e224272c610ccb13be5cfb805d50ecabbc5`, its
@@ -27,9 +32,35 @@ Select a profile with `AGENT_PROFILE_IDS_JSON`, for example
 `{"42":"example-profile-id"}`. Without a selection exactly one enabled profile
 must exist for the tenant. Profile data is read from PlatformConfig's
 `aida_tbl_AssistantProfile` and validated with the Agent's strict allowlist.
-The Identity service's existing, CIDR-protected `GET /api/runtime/tenants/:id`
-checks current tenant enablement. Admit this OfficePulse server in Identity's
-trusted application network configuration. No staff session is used for calls.
+
+## Cached configuration, not call-path lookups (#19)
+
+Required application settings load at startup through the existing
+PlatformConfig settings reader, and one effective enabled profile per mapped
+tenant loads into an in-memory cache at the same time.
+`AGENT_CONFIG_REFRESH_SECONDS` (default 300, range 30–3600) refreshes that cache
+on its own timer. The cache lookup used by a call is synchronous by type, so
+admission, Agent credential consumption and active-call monitoring cannot
+perform an HTTP request even by accident.
+
+A refresh that fails keeps the last good values: after a successful load, a
+PlatformConfig or Identity outage does not interrupt calls. An authoritative
+negative answer — the profile disabled or deleted, two enabled profiles with no
+selection, or a disabled tenant — removes the tenant from the cache instead, so
+a revocation still fails closed, at the next refresh rather than mid-call. A
+tenant with no cached configuration is not admitted and the caller stays on the
+native queue. `readyz` reports `agent-config-cache`, and `native-pbx-admission`
+no longer depends on NocoDB liveness.
+
+The Identity runtime tenant check is not a POC prerequisite and is off by
+default. Set `AGENT_IDENTITY_TENANT_CHECK=true` to have the background refresh
+(never a call) consult the service's existing `GET /api/runtime/tenants/:id`.
+Set `ID_CLIENT_SECRET` to an admitted Identity application secret;
+`OPS_IDENTITY_CLIENT_SECRET` is reused when both features run as the same
+application. CIDR admission remains supported when Identity is configured for
+trusted application networks. No staff session is used for calls. Rejected or
+unavailable checks log a sanitized warning containing only the tenant ID and
+HTTP status; no credential or response body is logged.
 
 `AGENT_STARTUP_TIMEOUT_SECONDS` defaults to 30 (range 1–60). Both independently
 generated 256-bit credentials expire after 120 seconds; startup has its own
@@ -40,11 +71,24 @@ active monitoring. Mutable profile text is never re-resolved for the response.
 
 ## Call flow and runtime evidence
 
-1. A reviewed ingress opts a call into the existing managed DID's native queue
-   timing. Only the AI branch invokes `aida-agent-inbound-v1`. PBX sets the local
-   queue fallback before any network operation and plays disclosure before AI.
-2. OfficePulse resolves ownership, creates a call record (`call-arrived`), and
-   captures the immutable profile and hashes in `agent_admission`. A repeated
+1. A managed DID row Gosubs into `aida-managed-did-v1` with its existing queue
+   timing. Before that `s` subroutine overwrites `${CONTEXT}`/`${EXTEN}`, the
+   include recovers the caller-side context and DID from the Gosub stack
+   (`STACK_PEEK`), so an API-created DID needs no DID-specific static edit; a
+   reviewed ingress wrapper may still pin `AIDA_AGENT_DID`/`AIDA_AGENT_CONTEXT`.
+   Only the AI branch invokes `aida-agent-inbound-v1`, and only when
+   `AIDA_NATIVE_ADMISSION=1` and both derived values pass validation — otherwise
+   managed DID v1's trunk behavior is unchanged. PBX sets the local queue
+   fallback before any network operation and plays disclosure before AI.
+   CallerID is never rewritten on this path and arrives as FastAGI
+   `agi_callerid`; `unknown`/`anonymous`/`restricted` becomes an absent caller
+   number rather than literal text.
+2. OfficePulse matches the ingress context and DID against the tenant's own
+   Asterisk Realtime rows, reads the cached profile, creates a call record
+   (`call-arrived`), and captures the immutable profile and hashes in
+   `agent_admission`. The call record pins the DID and caller number; the
+   `call-arrived` payload records the ingress context, resolved queue and
+   whether a caller number was present — never the digits themselves. A repeated
    linked ID never dispatches or issues credentials again; ambiguity falls back.
 3. It creates `aida-<call UUID>`, connects a monitor without media subscription,
    and dispatches exactly `{callSessionId, bootstrapToken}` (`agent-dispatched`).
@@ -84,14 +128,17 @@ resolver; this issue does not enable its separate Admin command.
    edit released migrations. It creates one integration-owned table only.
    Restrict access to this table to the runtime service; it contains pinned
    business prompts and credential hashes, never plaintext credentials or transcripts.
-2. Install the reviewed `asterisk/extensions_aida.conf` include. Managed DID v1's
-   default behavior is unchanged. In the operator's generic ingress, set
-   `AIDA_AGENT_DID` to the current E.164 extension, `AIDA_AGENT_CONTEXT` to the
-   native Realtime DID context, and `AIDA_NATIVE_ADMISSION=1` only for authorized
-   development traffic before entering that native context. The include uses
-   ARG1 from the actual DID row for the queue; do not copy DID/queue routes into
-   another database or add DID-specific static routes. Existing native recording
-   and hours/ring behavior run before the AI branch. The service and FastAGI
+2. Install the reviewed `asterisk/extensions_aida.conf` include (version 3) and
+   reload the dialplan. Managed DID v1's default behavior is unchanged while
+   `AIDA_NATIVE_ADMISSION` is unset. Enable the AI branch for authorized
+   development traffic with one deployment-wide global in extensions.conf
+   `[globals]`: `AIDA_NATIVE_ADMISSION=1`. The include then derives the DID and
+   its context from the DID's own Realtime row, so adding a Number through the
+   API needs no dialplan change; an ingress wrapper that already sets
+   `AIDA_AGENT_DID`/`AIDA_AGENT_CONTEXT` still wins. The include uses ARG1 from
+   the actual DID row for the queue; do not copy DID/queue routes into another
+   database or add DID-specific static routes. Existing native recording and
+   hours/ring behavior run before the AI branch. The service and FastAGI
    listener must be on this PBX host; the provided wrapper uses loopback.
 3. Configure an authenticated LiveKit inbound SIP trunk and one **callee** rule
    with `randomize=false`, no room prefix, and no automatic Agent dispatch.
@@ -125,17 +172,41 @@ explicit disposable `aida_agent_bootstrap_test` schema. Its tests verify paralle
 consumption, process-independent replay rejection, rollback after an injected
 event failure, call/tenant/room/expiry checks, fallback races, and SID protection.
 `TEST_ASTERISK_BINARY` runs a separate Asterisk process with isolated directories,
-no SIP listener and an isolated failed FastAGI endpoint to exercise local fallback.
+no SIP listener and an isolated failed FastAGI endpoint. It dials an API-shaped
+managed DID row that sets no `AIDA_AGENT_*` variable and asserts the derived
+context/DID/queue reach `aida-agent-inbound-v1` and that a failed bootstrap
+returns the caller to the native queue.
+
+Unit tests cover the #19 instrumented checks: one test loads the cache, then
+forces PlatformConfig to fail and replaces `fetch` with a recorder that throws,
+and drives admission, bootstrap credential consumption and a monitoring
+watchdog pass to completion with zero recorded requests. Others cover outage
+tolerance, authoritative revocation and the caller number/ingress evidence.
 
 For live acceptance, record deployed Git revisions and sanitized call IDs:
 
-- Dial the configured development number from an ordinary telephone. Confirm
-  the expected native queue timing/disclosure, admission, exactly one ready event,
-  English greeting, relevant spoken response, and caller/assistant text in Admin.
+- Dial the configured development number from an ordinary telephone, using a DID
+  created through the API with no dialplan hand edit. Confirm the expected native
+  queue timing/disclosure, admission, exactly one ready event, English greeting,
+  relevant spoken response, and caller/assistant text in Admin.
+- Confirm the call record shows the caller's number and the DID actually dialled,
+  and that the `call-arrived` event carries the original ingress context. Repeat
+  from a caller-ID-withheld handset and confirm an absent caller number rather
+  than literal `anonymous` text, with the call still admitted.
+- Confirm the profile that spoke is the cached one: check `agent-config-cache` in
+  `readyz` and the pinned `config_profile_id`/`config_profile_rev` on the call.
 - Interrupt the assistant and confirm audible barge-in. Hang up and verify actual
-  call completion. Repeat across two tenants and reject cross-tenant observers,
-  staff/anonymous observers, and Super Admin without explicit tenant selection
-  using AidaAdmin's `docs/LIVE_TRANSCRIPT_TESTING.md`.
+  call completion (`call-completed`, `ended_at` set). Repeat across two tenants
+  and reject cross-tenant observers, staff/anonymous observers, and Super Admin
+  without explicit tenant selection using AidaAdmin's
+  `docs/LIVE_TRANSCRIPT_TESTING.md`.
+- With a call cached and in progress, make PlatformConfig and Identity
+  unreachable, then place further calls on the same tenant and confirm they are
+  still admitted and answered. Restore the services and confirm the next refresh
+  logs a cached configuration without a restart.
+- Verify two routes that share one ingress context resolve to their own tenant,
+  queue and profile, and that a queue answered by a human never reaches the AI
+  branch.
 - Verify observer reconnect/late join without historical replay. Test absent,
   wrong, expired and reused credentials, unavailable bootstrap, Agent startup
   failure, worker loss, and SIP participant replacement. Each supported failure

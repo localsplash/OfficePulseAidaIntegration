@@ -1,5 +1,12 @@
 import { ConfigError } from '../errors.js';
-export interface AgentConfig { identityOrigin: string; profileIds: Map<string, string>; startupTimeoutMs: number; routeAttribute: string }
+export interface AgentConfig {
+  identityOrigin: string; identitySecret?: string; profileIds: Map<string, string>;
+  startupTimeoutMs: number; routeAttribute: string;
+  /** Background configuration refresh; never a call-path timeout. */
+  configRefreshMs: number;
+  /** Opt-in Identity runtime tenant check, run only by startup/refresh (#19). */
+  identityTenantCheck: boolean;
+}
 export function agentConfig(env: NodeJS.ProcessEnv): AgentConfig | undefined {
   if (env.NATIVE_ADMISSION_ENABLED !== undefined && !['true', 'false'].includes(env.NATIVE_ADMISSION_ENABLED)) throw new ConfigError(['NATIVE_ADMISSION_ENABLED must be true or false']);
   if (env.NATIVE_ADMISSION_ENABLED !== 'true') return;
@@ -18,7 +25,12 @@ export function agentConfig(env: NodeJS.ProcessEnv): AgentConfig | undefined {
     }
   } catch { throw invalid(); }
   const seconds = Number(env.AGENT_STARTUP_TIMEOUT_SECONDS ?? 30);
+  const refreshSeconds = Number(env.AGENT_CONFIG_REFRESH_SECONDS ?? 300);
   const routeAttribute = env.AIDA_ROUTE_TOKEN_ATTRIBUTE ?? 'sip.aidaRouteToken';
-  if (!Number.isInteger(seconds) || seconds < 1 || seconds > 60 || !/^[A-Za-z][A-Za-z0-9_.-]{1,100}$/.test(routeAttribute)) throw invalid();
-  return { identityOrigin: url.origin, profileIds, startupTimeoutMs: seconds * 1000, routeAttribute };
+  if (env.AGENT_IDENTITY_TENANT_CHECK !== undefined && !['true', 'false'].includes(env.AGENT_IDENTITY_TENANT_CHECK)) throw invalid();
+  if (!Number.isInteger(seconds) || seconds < 1 || seconds > 60 || !Number.isInteger(refreshSeconds) || refreshSeconds < 30 || refreshSeconds > 3600 ||
+    !/^[A-Za-z][A-Za-z0-9_.-]{1,100}$/.test(routeAttribute)) throw invalid();
+  return { identityOrigin: url.origin, identitySecret: env.ID_CLIENT_SECRET || env.OPS_IDENTITY_CLIENT_SECRET || undefined,
+    profileIds, startupTimeoutMs: seconds * 1000, routeAttribute, configRefreshMs: refreshSeconds * 1000,
+    identityTenantCheck: env.AGENT_IDENTITY_TENANT_CHECK === 'true' };
 }

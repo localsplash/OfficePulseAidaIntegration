@@ -36,14 +36,15 @@ export function cachedProfileSnapshot(entry: CachedProfile, call: { callSessionI
 export function nocoProfileSource(noco: NocoReadApi, profileIds: ReadonlyMap<string, string>): ProfileSource {
   return { async profile(tenantId: string): Promise<CachedProfile | undefined> {
     const selected = profileIds.get(tenantId);
+    // Enablement is evaluated here, not pushed into the query: the column is
+    // stored as 1/0, and a `(enabled,eq,true)` filter silently matches nothing.
     const rows = await noco.listRecords('aida_tbl_AssistantProfile', [
       { field: 'iTenantId', op: 'eq', value: Number(tenantId) }, ...(selected ? [{ field: 'id', op: 'eq' as const, value: selected }] : []),
-      { field: 'enabled', op: 'eq', value: true },
-    ], 2);
-    if (rows.length !== 1) return; // multiple enabled profiles require an explicit selection
-    const r = rows[0]!;
-    if (String(r.iTenantId) !== tenantId || ![true, 1, '1'].includes(r.enabled as boolean) ||
-      !/^[A-Za-z0-9_.-]{1,60}$/.test(String(r.id)) || !Number.isSafeInteger(Number(r.revision))) return;
+    ], 50);
+    const enabled = rows.filter(r => String(r.iTenantId) === tenantId && [true, 1, '1'].includes(r.enabled as boolean));
+    if (enabled.length !== 1) return; // multiple enabled profiles require an explicit selection
+    const r = enabled[0]!;
+    if (!/^[A-Za-z0-9_.-]{1,60}$/.test(String(r.id)) || !Number.isSafeInteger(Number(r.revision))) return;
     const entry: CachedProfile = { profileId: String(r.id), profileRevision: Number(r.revision),
       businessName: String(r.business_name ?? ''), prompt: String(r.prompt ?? ''),
       ...Object.fromEntries(([['tone', r.tone], ['objective', r.objective], ['openingStatement', r.opening_statement],

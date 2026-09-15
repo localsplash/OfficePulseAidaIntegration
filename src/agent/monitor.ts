@@ -11,7 +11,7 @@ export interface RoomMonitor {
 }
 /** Receives lifecycle data only. Never subscribes to media or retains/logs transcript bytes. */
 export class AgentMonitor implements RoomMonitor {
-  private readonly rooms = new Map<string, { room: Room; timer: NodeJS.Timeout; busy: boolean; deadline: number; conversation: boolean }>();
+  private readonly rooms = new Map<string, { room: Room; timer: NodeJS.Timeout; busy: boolean; deadline: number; conversation: boolean; topics: Set<string> }>();
   constructor(private readonly opts: { authority: BootstrapAuthority; url: string; apiKey: string; apiSecret: string;
     fallback: (id: string) => Promise<void>; roomFactory?: () => Room;
     /** Diagnoses connect/fallback failures. LiveKit errors carry no profile or credential text. */
@@ -20,10 +20,18 @@ export class AgentMonitor implements RoomMonitor {
   async start(id: string, deadline: number): Promise<void> {
     if (this.rooms.has(id)) return;
     const room = this.opts.roomFactory?.() ?? new Room();
-    const entry = { room, timer: undefined as unknown as NodeJS.Timeout, busy: false, deadline, conversation: false };
+    const entry = { room, timer: undefined as unknown as NodeJS.Timeout, busy: false, deadline, conversation: false, topics: new Set<string>() };
     this.rooms.set(id, entry);
     const fail = () => { void this.fail(id).catch(() => {}); };
     room.on(RoomEvent.DataReceived, (bytes, sender, kind, topic) => {
+      // Records that a topic was seen, once per call. Never the payload:
+      // transcripts and profile text are not logged or retained.
+      const seen = `${topic ?? '(none)'}|${kind}`;
+      if (!entry.topics.has(seen)) {
+        entry.topics.add(seen);
+        this.opts.logger?.warn('monitor observed room data', { callSessionId: id, topic: topic ?? null,
+          kind, reliable: kind === 0, bytes: bytes.length, senderIdentity: sender?.identity ?? null, senderSid: sender?.sid ?? null });
+      }
       if (topic === 'transcript' && bytes.length <= 16384 && sender && kind === 0) {
         void this.conversation(id, bytes, sender.sid ?? '').catch(fail);
         return;
@@ -51,16 +59,26 @@ export class AgentMonitor implements RoomMonitor {
     }
   }
   async ready(id: string, bytes: Uint8Array, identity: string, sid: string): Promise<void> {
+    // Names why a readiness claim was refused. Field names only, never values.
+    const refuse = (reason: string, fields?: Record<string, unknown>) =>
+      this.opts.logger?.warn('agent readiness refused', { callSessionId: id, reason, senderIdentity: identity, senderSid: sid, ...fields });
     let value: Record<string, unknown>;
     try {
       value = object(JSON.parse(Buffer.from(bytes).toString('utf8')));
       exact(value, ['type', 'schemaVersion', 'callSessionId', 'agentIdentity', 'agentParticipantSid']);
-    } catch { return; }
-    if (value.type !== 'aida.event.agent_ready' || value.schemaVersion !== 1 || value.callSessionId !== id || value.agentIdentity !== identity || value.agentParticipantSid !== sid) return;
+    } catch { refuse('payload-shape'); return; }
+    if (value.type !== 'aida.event.agent_ready' || value.schemaVersion !== 1 || value.callSessionId !== id || value.agentIdentity !== identity || value.agentParticipantSid !== sid) {
+      refuse('payload-mismatch', { typeMatches: value.type === 'aida.event.agent_ready', schemaMatches: value.schemaVersion === 1,
+        callMatches: value.callSessionId === id, identityMatches: value.agentIdentity === identity, sidMatches: value.agentParticipantSid === sid });
+      return;
+    }
     const a = await this.opts.authority.opts.store.get(id);
-    if (!a || a.status !== 'admitted' || a.agentIdentity !== identity || a.agentSid !== sid) return;
+    if (!a || a.status !== 'admitted' || a.agentIdentity !== identity || a.agentSid !== sid) {
+      refuse('not-bound', { admissionStatus: a?.status ?? null, boundIdentityMatches: a?.agentIdentity === identity, boundSidMatches: a?.agentSid === sid });
+      return;
+    }
     const entry = this.rooms.get(id);
-    if (!entry || Date.now() >= entry.deadline) { await this.fail(id); return; }
+    if (!entry || Date.now() >= entry.deadline) { refuse('deadline-expired'); await this.fail(id); return; }
     await this.opts.authority.participants(a);
     await this.opts.authority.opts.store.transition(id, 'ready', 'agent-ready');
   }

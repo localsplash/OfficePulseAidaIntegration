@@ -23,7 +23,11 @@ ProtectHome=true
 PrivateTmp=true
 ProtectKernelTunables=true
 ProtectControlGroups=true
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# AF_NETLINK is required: libwebrtc (@livekit/rtc-node) enumerates network
+# interfaces over netlink while gathering ICE candidates for the Agent room
+# monitor. Without it only the first room connection in the process succeeds
+# and every later call falls back at monitor-connect (issue #19).
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 MemoryMax=512M
 
 [Install]

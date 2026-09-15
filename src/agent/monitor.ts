@@ -15,7 +15,7 @@ export class AgentMonitor implements RoomMonitor {
   constructor(private readonly opts: { authority: BootstrapAuthority; url: string; apiKey: string; apiSecret: string;
     fallback: (id: string) => Promise<void>; roomFactory?: () => Room;
     /** Diagnoses connect/fallback failures. LiveKit errors carry no profile or credential text. */
-    logger?: Pick<Logger, 'warn'> }) {}
+    logger?: Pick<Logger, 'info' | 'warn'> }) {}
   isMonitoring(id: string): boolean { return this.rooms.has(id); }
   async start(id: string, deadline: number): Promise<void> {
     if (this.rooms.has(id)) return;
@@ -29,7 +29,7 @@ export class AgentMonitor implements RoomMonitor {
       const seen = `${topic ?? '(none)'}|${kind}`;
       if (!entry.topics.has(seen)) {
         entry.topics.add(seen);
-        this.opts.logger?.warn('monitor observed room data', { callSessionId: id, topic: topic ?? null,
+        this.opts.logger?.info('monitor observed room data', { callSessionId: id, topic: topic ?? null,
           kind, reliable: kind === 0, bytes: bytes.length, senderIdentity: sender?.identity ?? null, senderSid: sender?.sid ?? null });
       }
       if (topic === 'transcript' && bytes.length <= 16384 && sender && kind === 0) {

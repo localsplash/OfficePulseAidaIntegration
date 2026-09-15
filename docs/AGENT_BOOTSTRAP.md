@@ -155,6 +155,13 @@ resolver; this issue does not enable its separate Admin command.
    and matching worker name. Permit outbound LiveKit signaling/data connectivity
    from OfficePulse for the monitor. The container uses Debian/glibc for the
    pinned `@livekit/rtc-node` native runtime and connects with autoSubscribe=false.
+   A sandboxed service unit must allow **`AF_NETLINK`** in
+   `RestrictAddressFamilies` alongside `AF_INET`/`AF_INET6`/`AF_UNIX`: libwebrtc
+   enumerates network interfaces over netlink while gathering ICE candidates.
+   Without it the first room connection in the process succeeds and every later
+   one hangs until the monitor's bound expires, so exactly one call per restart
+   reaches the Agent and the rest fall back at `monitor-connect`. See
+   `deploy/systemd/aida-integration.service`.
 6. Exclude bootstrap request/response bodies, authorization headers, SIP route
    attributes and dispatch metadata from proxy/tracing logs. Disable Asterisk
    AGI debug, SIP packet logging, and verbose dialplan logging for this path:
@@ -176,6 +183,14 @@ no SIP listener and an isolated failed FastAGI endpoint. It dials an API-shaped
 managed DID row that sets no `AIDA_AGENT_*` variable and asserts the derived
 context/DID/queue reach `aida-agent-inbound-v1` and that a failed bootstrap
 returns the caller to the native queue.
+
+A fallback is attributable without reproducing the call. Admission records the
+setup stage it fell back at (`resolve`, `create-session`, `livekit-create-room`,
+`monitor-connect`, `livekit-dispatch`, ...), the monitor records the underlying
+room connection failure, each distinct room data topic it observes once per call,
+and the reason any readiness claim was refused (`payload-shape`,
+`payload-mismatch`, `not-bound`, `deadline-expired`). None of these log payloads,
+upstream message text, transcripts or profile text.
 
 Unit tests cover the #19 instrumented checks: one test loads the cache, then
 forces PlatformConfig to fail and replaces `fetch` with a recorder that throws,

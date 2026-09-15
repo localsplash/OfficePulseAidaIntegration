@@ -90,11 +90,13 @@ async function main(): Promise<void> {
           ? { context: 'aida-agent-queue-fallback', exten: call.destinationId! } : undefined;
       },
     } } : {}) });
-  if (authority && agent) monitor = new AgentMonitor({ authority, ...config.livekit, fallback: id => takeover.fallback(id) });
+  if (authority && agent) monitor = new AgentMonitor({ authority, ...config.livekit, fallback: id => takeover.fallback(id),
+    logger: logger.child({ component: 'agent-monitor' }) });
   const orchestrator = authority && agent && admissions && native && monitor ? new NativeCallOrchestrator({
     runtime, store: admissions, native: native.authority, livekit, monitor, instanceId: config.officePulseInstanceId,
     observeCaller: (id, channelId) => takeover.observeCaller(id, channelId),
     startupTimeoutMs: agent.startupTimeoutMs, setupTimeoutMs: Math.max(100, config.fastAgi.sessionTimeoutMs - 500), available: () => readiness.snapshot().components.ari?.ready === true,
+    logger: logger.child({ component: 'admission' }),
   }) : nativePbxFallback;
   ari.on('connected', () => { void takeover.reconcile().catch((err) => logger.error('reconciliation failed', { err })); });
   const routes = assembleApiRoutes(

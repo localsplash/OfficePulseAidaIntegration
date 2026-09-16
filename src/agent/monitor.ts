@@ -1,4 +1,4 @@
-import { Room, RoomEvent } from '@livekit/rtc-node';
+import { DataPacketKind, Room, RoomEvent } from '@livekit/rtc-node';
 import { signAccessToken } from '../livekit/token.js';
 import { exact, object } from './contract.js';
 import type { BootstrapAuthority } from './authority.js';
@@ -30,13 +30,13 @@ export class AgentMonitor implements RoomMonitor {
       if (!entry.topics.has(seen)) {
         entry.topics.add(seen);
         this.opts.logger?.info('monitor observed room data', { callSessionId: id, topic: topic ?? null,
-          kind, reliable: kind === 0, bytes: bytes.length, senderIdentity: sender?.identity ?? null, senderSid: sender?.sid ?? null });
+          kind, reliable: kind === DataPacketKind.KIND_RELIABLE, bytes: bytes.length, senderIdentity: sender?.identity ?? null, senderSid: sender?.sid ?? null });
       }
-      if (topic === 'transcript' && bytes.length <= 16384 && sender && kind === 0) {
+      if (topic === 'transcript' && bytes.length <= 16384 && sender && kind === DataPacketKind.KIND_RELIABLE) {
         void this.conversation(id, bytes, sender.sid ?? '').catch(fail);
         return;
       }
-      if (topic !== 'aida.event.agent_ready' || bytes.length > 2048 || kind !== 0 || !sender) return;
+      if (topic !== 'aida.event.agent_ready' || bytes.length > 2048 || kind !== DataPacketKind.KIND_RELIABLE || !sender) return;
       void this.ready(id, bytes, sender.identity, sender.sid ?? '').catch(fail);
     });
     room.on(RoomEvent.Disconnected, fail);

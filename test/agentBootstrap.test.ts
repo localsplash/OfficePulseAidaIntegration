@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
-import type { Room } from '@livekit/rtc-node';
+import { DataPacketKind, RoomEvent, type Room } from '@livekit/rtc-node';
 import { credential, digest, profileSnapshot, parseBinding, CredentialRejected } from '../src/agent/contract.js';
 import type { Admission, AdmissionStore } from '../src/agent/store.js';
 import { BootstrapAuthority, type AgentLiveKit, type Participant } from '../src/agent/authority.js';
@@ -302,4 +302,30 @@ test('fallback racing a human answer cannot break an established human bridge', 
   await new Promise(r => setTimeout(r, 10));
   assert.equal(manager.getSession(id)?.humanAnswered, false); assert.ok(ari.hangups.some(h => h.channelId === human.id));
   release(); await redirect; assert.equal(ari.continued.length, 1);
+});
+
+test('RTC data callback accepts reliable ready and transcripts and ignores lossy packets', async t => {
+  const h = setup(); await h.authority.authorize(id, fixture.dispatch.bootstrapToken, fixture.request);
+  const room = new FakeRoom(); const observations: Array<Record<string, unknown>> = [];
+  const monitor = new AgentMonitor({ authority: h.authority, url: 'wss://unused', apiKey: 'x', apiSecret: 'x',
+    fallback: async () => {}, roomFactory: () => room as unknown as Room,
+    logger: { info: (_msg, fields) => { observations.push(fields ?? {}); }, warn: () => {} } });
+  t.after(() => monitor.close()); await monitor.start(id, Date.now() + 30000);
+  const sender = { identity: 'agent-1', sid: 'PA_agent' };
+  const flush = () => new Promise<void>(resolve => setImmediate(resolve));
+  const ready = Buffer.from(JSON.stringify(fixture.ready));
+  for (const kind of [DataPacketKind.KIND_LOSSY, undefined]) {
+    room.emit(RoomEvent.DataReceived, ready, sender, kind, 'aida.event.agent_ready');
+    await flush(); assert.equal(h.store.rows.get(id)?.status, 'admitted');
+  }
+  room.emit(RoomEvent.DataReceived, ready, sender, DataPacketKind.KIND_RELIABLE, 'aida.event.agent_ready');
+  await flush(); assert.equal(h.store.rows.get(id)?.status, 'ready');
+  const transcript = Buffer.from(JSON.stringify({ type: 'transcript', callId: id, speaker: 'caller', text: 'private-utterance' }));
+  room.emit(RoomEvent.DataReceived, transcript, sender, DataPacketKind.KIND_LOSSY, 'transcript');
+  await flush(); assert.equal(h.runtime.events.get(id)?.length ?? 0, 0);
+  room.emit(RoomEvent.DataReceived, transcript, sender, DataPacketKind.KIND_RELIABLE, 'transcript');
+  await flush(); assert.equal(h.runtime.events.get(id)?.[0]?.eventType, 'conversation-observed');
+  for (const entry of observations) assert.equal(entry.reliable, entry.kind === DataPacketKind.KIND_RELIABLE);
+  assert.ok(!JSON.stringify(observations).includes('private-utterance'));
+  assert.ok(!JSON.stringify(h.runtime.events.get(id)).includes('private-utterance'));
 });

@@ -1928,7 +1928,7 @@
           },
           "managed": {
             "type": "boolean",
-            "description": "True when the endpoint has the managed Dial route in this context; imported endpoints are false."
+            "description": "True when the endpoint has the managed Dial route in this context; imported endpoints are false. Deleting through this API additionally requires the route's Hangup row to be intact (409 otherwise)."
           },
           "applyState": {
             "type": "string",

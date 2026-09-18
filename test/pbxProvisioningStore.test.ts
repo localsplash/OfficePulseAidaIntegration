@@ -205,6 +205,19 @@ test('manual, foreign and absent DID rows are never replaced or deleted even whe
   assert.deepEqual(owned.status(), { committed: 2, rolledBack: 0, released: 2 });
 });
 
+test('setDid refuses a queue this context does not own, whether foreign or ambiguous', async () => {
+  const rows = didDialplanRows(DID, { queue: 'concierge', ringsBeforeAi: 2 });
+  for (const owners of [[{ context: 'tenant-two' }], [{ context: CTX }, { context: 'tenant-two' }], []]) {
+    const fake = fakeWriter(call => {
+      if (call.sql.startsWith('SELECT name FROM queues')) return [{ name: 'concierge' }];
+      if (isMarkerLookup(call)) return owners;
+      if (call.sql.startsWith('SELECT priority')) return [];
+    });
+    await assert.rejects(fake.writer.setDid(INBOUND, DID, 'concierge', rows, CTX), NotFoundError, JSON.stringify(owners));
+    assert.equal(fake.calls.some(call => call.sql.startsWith('DELETE') || call.sql.startsWith('INSERT')), false, JSON.stringify(owners));
+  }
+});
+
 test('a DID reference blocks queue and member deletion atomically', async () => {
   const fake = fakeWriter(call => {
     if (call.sql.startsWith('SELECT name FROM queues')) return [{ name: 'concierge' }];

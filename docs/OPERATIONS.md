@@ -9,7 +9,6 @@ settings in the `officepulse` application scope:
 | --- | --- |
 | `OPS_ENABLED` | `true` |
 | `OPS_PUBLIC_URL` | `https://officepulse-admin.localsplash.dev` |
-| `OPS_IDENTITY_URL` | `https://identity.localsplash.dev` |
 | `OPS_API_URL` | `https://officepulse-api.localsplash.dev` |
 | `OPS_HTTP_PORT` | `8087` |
 
@@ -20,6 +19,22 @@ at Identity instead. Login uses `/authorize`, exchanges a single-use code at
 `/api/token`, and revalidates `/api/sessions/introspect` on every data request.
 The fixed HTTPS callback is `OPS_PUBLIC_URL` + `/ops/auth/callback`. Only central
 Super Admins may enter. No local password or separate user database is created.
+
+### Identity base URL
+
+The Identity URL is not duplicated into the operations settings (#20). In
+PlatformConfig mode the login and session-introspection origin defaults to the
+Identity application's own `APP_BASE_URL` record (`cfg_tbl_Setting`,
+`app = identity`), resolved and validated as an HTTPS origin once at startup as
+described in the README's "Identity base URL" section. A missing, blank,
+duplicate or malformed record, or a NocoDB failure during that lookup, is reported
+as a configuration error and is never replaced by a guessed host or another
+application's URL. An explicit `OPS_IDENTITY_URL` keeps precedence when the
+operations login must use a different Identity origin; in
+`PLATFORM_CONFIG_MODE=environment` the default is the environment's `ID_BASE_URL`.
+Do not set `ID_BASE_URL` in PlatformConfig mode: it fails startup as a retired
+override. A change to the central record takes effect at the next restart;
+nothing is hot reloaded.
 
 The authenticated interactive API console is at `OPS_PUBLIC_URL` + `/ops/docs`.
 Browser requests use the same-origin `/ops/api/v1/admin/*` gateway, which revalidates

@@ -13,8 +13,10 @@ export function agentConfig(env: NodeJS.ProcessEnv): AgentConfig | undefined {
   const invalid = () => new ConfigError(['Native admission requires FASTAGI_BIND=127.0.0.1, voice, PBX inventory, HTTPS ID_BASE_URL, distinct LIVEKIT_AGENT_NAME and LIVEKIT_TRUNK_ENDPOINT; validate AGENT_PROFILE_IDS_JSON and startup settings']);
   if (env.FASTAGI_BIND !== '127.0.0.1' || env.VOICE_ENABLED !== 'true' || env.PBX_INVENTORY_ENABLED !== 'true' || !/^[a-zA-Z0-9_.-]{1,80}$/.test(env.LIVEKIT_TRUNK_ENDPOINT ?? '') ||
     !/^[a-zA-Z0-9_.-]{1,80}$/.test(env.LIVEKIT_AGENT_NAME ?? '') || env.LIVEKIT_AGENT_NAME === 'aida-prime') throw invalid();
-  let url: URL; try { url = new URL(env.ID_BASE_URL ?? ''); } catch { throw invalid(); }
-  if (url.protocol !== 'https:' || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw invalid();
+  // ID_BASE_URL is filled from the Identity application's own PlatformConfig record at startup (#20); only environment-only mode sets it by hand.
+  const identity = () => new ConfigError(['Native admission requires an HTTPS Identity origin: set the PlatformConfig record identity/APP_BASE_URL (ID_BASE_URL only with PLATFORM_CONFIG_MODE=environment)']);
+  let url: URL; try { url = new URL(env.ID_BASE_URL ?? ''); } catch { throw identity(); }
+  if (url.protocol !== 'https:' || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw identity();
   const profileIds = new Map<string, string>();
   try {
     const mapping = JSON.parse(env.AGENT_PROFILE_IDS_JSON ?? '{}');

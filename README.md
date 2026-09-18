@@ -81,6 +81,30 @@ live PBX registrations or calls were validated. With no external PBX connection,
 Admin shows inventory unavailable while business administration and integration
 history remain usable.
 
+### Identity base URL
+
+In PlatformConfig mode (the default) OfficePulse keeps no copy of the Identity
+URL. At startup the settings reader loads the Identity application's own record,
+`cfg_tbl_Setting` with `app = identity` and `settingKey = APP_BASE_URL`, validates
+it as an HTTPS origin (no credentials, path, query or fragment; a trailing slash is
+tolerated) and supplies it internally as `ID_BASE_URL` to the background tenant
+check and, unless `OPS_IDENTITY_URL` is set explicitly, to the Operations login.
+Only that record is consulted: another application's `APP_BASE_URL` is never
+selected and the key is never looked up without the `app` filter. A missing or
+blank record leaves the origin unset, so native admission refuses to start and
+names the record; duplicate or malformed records and a NocoDB failure during the
+lookup fail startup with an explicit configuration error. Errors and log lines
+never include the setting value or NocoDB credentials.
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `PLATFORM_CONFIG_MODE` | PlatformConfig | `environment` is the retained environment-only mode: NocoDB is not read and every setting, including `ID_BASE_URL`, comes from the process environment |
+| `ID_BASE_URL` | resolved from `identity/APP_BASE_URL` | Retired as an input in PlatformConfig mode: a nonblank value in the environment or in any `*`/`aida`/`officepulse` row fails startup; set it by hand only in environment-only mode |
+| `OPS_IDENTITY_URL` | the resolved Identity origin | An explicit value keeps precedence; see `docs/OPERATIONS.md` |
+
+The record is read once at startup; a central change takes effect at the next
+restart. Nothing is hot reloaded.
+
 ## Development and deployment
 
 Use Node 22: `npm ci`, `npm run verify`, then `npm run build`. The Dockerfile

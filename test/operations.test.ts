@@ -39,6 +39,13 @@ test('operations config is opt-in and requires canonical HTTPS application origi
   const cfg=operationsConfig({OPS_ENABLED:'true',OPS_PUBLIC_URL:origin,OPS_IDENTITY_URL:'https://identity.example.test',OPS_API_URL:'https://api.example.test'});
   assert.equal(cfg?.port,8087);assert.equal(cfg?.ari,undefined);
 });
+test('OPS_IDENTITY_URL defaults to the centrally resolved Identity origin and an explicit value keeps precedence',()=>{
+  const base={OPS_ENABLED:'true',OPS_PUBLIC_URL:origin,OPS_API_URL:'https://api.example.test'};
+  assert.equal(operationsConfig({...base,ID_BASE_URL:'https://id.example.test'})?.identityUrl,'https://id.example.test');
+  assert.equal(operationsConfig({...base,ID_BASE_URL:'https://id.example.test',OPS_IDENTITY_URL:'https://login.example.test'})?.identityUrl,'https://login.example.test');
+  assert.throws(()=>operationsConfig(base),/OPS_IDENTITY_URL is unset and no Identity origin was resolved.*identity\/APP_BASE_URL/);
+  assert.throws(()=>operationsConfig({...base,ID_BASE_URL:'http://id.example.test'}),/ID_BASE_URL must be an HTTPS origin/);
+});
 test('public shell contains no PBX records; data and unknown backend proxy routes are denied',async t=>{
   const f=await fixture(t);
   const shell=await f.request('/');assert.equal(shell.status,200);assert.match(await shell.text(),/OfficePulse/);

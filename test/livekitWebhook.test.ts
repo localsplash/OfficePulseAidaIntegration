@@ -231,6 +231,18 @@ test('the LiveKit client signs REST calls and reports failures as upstream error
   );
 });
 
+test('agent dispatch metadata v2 carries exactly the credential and the routing scope', async () => {
+  const { logger } = captureLogger();
+  const seen: Array<Record<string, unknown>> = [];
+  const client = new LiveKitClient({ url: 'wss://acme.livekit.cloud', apiKey: API_KEY, apiSecret: API_SECRET, agentName: 'aida-prime-bootstrap-dev', timeoutMs: 200, logger,
+    fetchImpl: (async (_input: string | URL | Request, init?: RequestInit) => { seen.push(JSON.parse(String(init?.body))); return new Response('{"id":"dispatch-1"}', { status: 200 }); }) as typeof fetch });
+  const token = 'b'.repeat(43);
+  assert.equal(await client.dispatchAgent('aida-room', { callSessionId: 'cs-1', bootstrapToken: token, pbxInstanceId: 'op-test', context: 'office-main' }), 'dispatch-1');
+  assert.deepEqual(JSON.parse(String(seen[0]!.metadata)), { callSessionId: 'cs-1', bootstrapToken: token, pbxInstanceId: 'op-test', context: 'office-main' });
+  assert.equal(seen[0]!.agent_name, 'aida-prime-bootstrap-dev');
+  assert.equal(seen[0]!.restart_policy, 'JRP_NEVER');
+});
+
 test('an effect failure reaches HTTP error handling and a retry can apply the delivery', async () => {
   const { handler, runtime } = makeHandler();
   const body = event();

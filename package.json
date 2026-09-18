@@ -17,6 +17,7 @@
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "validate:prompts": "tsx src/prompts/validateCli.ts prompts/manifest.json prompts/audio",
+    "pbx:adopt-queue": "tsx src/pbx/adoptQueueCli.ts",
     "simulate:agi": "tsx simulators/fake-asterisk-agi.ts",
     "simulate:ari": "tsx simulators/fake-ari-server.ts"
   },

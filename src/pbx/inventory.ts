@@ -1,58 +1,28 @@
 import mysql from 'mysql2/promise';
-import { recognizedQueueMarker } from './queueOwnership.js';
-import { ConfigError, DependencyUnavailableError, ValidationError } from '../errors.js';
+import { ownedQueueNames } from './queueOwnership.js';
+import { CONTEXT_RE } from './managedDid.js';
+import { DependencyUnavailableError, ValidationError } from '../errors.js';
 import type { RuntimeMysqlConfig } from '../runtime/mysqlRuntimeStore.js';
 import type { Route } from '../http/httpServer.js';
 
-export interface PbxTenantScope { contexts: string[]; queueNames: string[]; didContext?: string }
-export type PbxTenantScopes = ReadonlyMap<string, PbxTenantScope>;
 export interface PbxExtension {
-  id: string; context: string; callerId: string | null; transport: string | null; aors: string | null;
+  id: string;
+  /** Dialable number from the managed Dial route in this context, else the legacy id fallback, else null. */
+  extension: string | null;
+  context: string; callerId: string | null; transport: string | null; aors: string | null;
+  /** True when the endpoint has the managed Dial route in this context; imported endpoints are false. */
+  managed: boolean;
 }
 export interface PbxQueue {
   id: string; name: string; strategy: string | null;
   members: { interface: string; memberName: string | null; penalty: number; paused: boolean }[];
 }
 
-/** Operator-owned authorization references, never a second copy of PBX records. */
-export function parsePbxTenantScopes(raw: string | undefined): PbxTenantScopes {
-  if (!raw?.trim()) return new Map();
-  const invalid = () => new ConfigError(['PBX_INVENTORY_TENANTS_JSON must map canonical tenant IDs to contexts/queueNames arrays and optional didContext/didNumbers']);
-  let parsed: unknown;
-  try { parsed = JSON.parse(raw); } catch { throw invalid(); }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw invalid();
-  const scopes = new Map<string, PbxTenantScope>();
-  const owners = { contexts: new Set<string>(), queueNames: new Set<string>() };
-  for (const [id, scope] of Object.entries(parsed)) {
-    if (!/^[1-9][0-9]*$/.test(id) || !Number.isSafeInteger(Number(id)) || !scope || typeof scope !== 'object' || Array.isArray(scope)) throw invalid();
-    const typed = scope as Record<string, unknown>;
-    if (Object.keys(typed).some((key) => !['contexts', 'queueNames', 'didContext', 'didNumbers'].includes(key))) throw invalid();
-    for (const field of ['contexts', 'queueNames'] as const) {
-      const values = typed[field];
-      if (!Array.isArray(values) || values.length > 100) throw invalid();
-      for (const value of values) {
-        const limit = field === 'contexts' ? 40 : 80;
-        if (typeof value !== 'string' || value.length > limit || !/^[a-zA-Z0-9_.-]+$/.test(value)) throw invalid();
-        const normalized = value.toLowerCase();
-        if (owners[field].has(normalized)) throw invalid();
-        owners[field].add(normalized);
-      }
-    }
-    const didContext = typed.didContext;
-    if (didContext !== undefined && (typeof didContext !== 'string' || !/^[a-zA-Z0-9_.-]{1,40}$/.test(didContext))) throw invalid();
-    // Accept the retired field during rollout so existing environments still boot,
-    // but discard it: only AidaAdmin's current Identity assertion authorizes DIDs.
-    const legacyDidNumbers = typed.didNumbers;
-    if (legacyDidNumbers !== undefined && (!Array.isArray(legacyDidNumbers) || legacyDidNumbers.length > 100 || legacyDidNumbers.some(did => typeof did !== 'string' || !/^\+[1-9][0-9]{6,14}$/.test(did)))) throw invalid();
-    scopes.set(id, { contexts: [...typed.contexts as string[]], queueNames: [...typed.queueNames as string[]],
-      ...(didContext ? { didContext } : {}) });
-  }
-  return scopes;
-}
-
+/** Routing scope is {pbxInstanceId, context}: every read names one Asterisk context and derives ownership from Asterisk's own rows. */
 export interface InventoryReader {
-  extensions(scope: PbxTenantScope): Promise<PbxExtension[]>;
-  queues(scope: PbxTenantScope): Promise<PbxQueue[]>;
+  contexts(): Promise<string[]>;
+  extensions(context: string): Promise<PbxExtension[]>;
+  queues(context: string): Promise<PbxQueue[]>;
 }
 export type InventoryQuery = (sql: string, values: string[]) => Promise<Record<string, unknown>[]>;
 const MAX_ROWS = 1000;
@@ -61,32 +31,39 @@ function bounded(rows: Record<string, unknown>[]): Record<string, unknown>[] {
   if (rows.length > MAX_ROWS) throw new DependencyUnavailableError('PBX inventory exceeds the supported POC size');
   return rows;
 }
+/** Fallback for endpoints without a managed route: the legacy `<digits>-t<N>` id or a pure-digit id. */
+export const legacyExtension = (id: string): string | null => /^([0-9]{2,12})-t[1-9][0-9]*$/.exec(id)?.[1] ?? (/^[0-9]{2,12}$/.test(id) ? id : null);
+/** The endpoint a managed extension route's first row dials; undefined for any other dialplan. */
+export const dialedEndpoint = (appdata: string): string | undefined => /^PJSIP\/([A-Za-z0-9_.-]{1,40}),20$/.exec(appdata)?.[1];
 
 /** Only SELECT on vendor tables. No auth reads, provisioning projection, DDL or writes. */
 export class PbxInventoryReader implements InventoryReader {
-  constructor(private readonly query: InventoryQuery, private readonly includeManagedQueues = false) {}
-  async extensions(scope: PbxTenantScope): Promise<PbxExtension[]> {
-    if (!scope.contexts.length) return [];
-    const rows = bounded(await this.query(
-      `SELECT id, context, callerid, transport, aors FROM ps_endpoints WHERE BINARY context IN (${scope.contexts.map(() => '?').join(',')}) ORDER BY id LIMIT 1001`, scope.contexts));
-    return rows.map((row) => ({ id: String(row.id), context: String(row.context), callerId: nullable(row.callerid), transport: nullable(row.transport), aors: nullable(row.aors) }));
+  constructor(private readonly query: InventoryQuery) {}
+  async contexts(): Promise<string[]> {
+    // BINARY-distinct: two contexts differing only by case are two scopes on this PBX.
+    const rows = bounded(await this.query("SELECT MIN(context) AS context FROM (SELECT context FROM ps_endpoints WHERE context IS NOT NULL AND context <> '' UNION ALL SELECT context FROM extensions WHERE context IS NOT NULL AND context <> '') AS c GROUP BY BINARY context LIMIT 1001", []));
+    return rows.map(row => String(row.context)).sort();
   }
-  async queues(scope: PbxTenantScope): Promise<PbxQueue[]> {
-    const names = new Set(scope.queueNames);
-    // Exact versioned native ownership markers, never namespace-prefix inference.
-    if (this.includeManagedQueues && scope.contexts.length) {
-      const markers = bounded(await this.query(`SELECT exten, priority, app, appdata FROM extensions WHERE BINARY context IN (${scope.contexts.map(() => '?').join(',')}) AND app = 'NoOp' AND priority = 1 AND LEFT(exten, 13) = '__aida_queue_' ORDER BY exten LIMIT 1001`, scope.contexts));
-      for (const row of markers) {
-        const id = recognizedQueueMarker(String(row.exten), String(row.appdata));
-        if (id) names.add(id);
-      }
+  async extensions(context: string): Promise<PbxExtension[]> {
+    const rows = bounded(await this.query('SELECT id, context, callerid, transport, aors FROM ps_endpoints WHERE BINARY context = ? ORDER BY id LIMIT 1001', [context]));
+    // The dialable number is the managed Dial route in this context, never the endpoint id alone.
+    const routes = bounded(await this.query("SELECT exten, appdata FROM extensions WHERE BINARY context = ? AND priority = 1 AND app = 'Dial' AND LEFT(appdata, 6) = 'PJSIP/' ORDER BY exten LIMIT 1001", [context]));
+    const dialed = new Map<string, string>();
+    for (const row of routes) {
+      const endpoint = dialedEndpoint(String(row.appdata ?? '')); const exten = String(row.exten);
+      if (endpoint && /^[0-9]{2,12}$/.test(exten) && !dialed.has(endpoint)) dialed.set(endpoint, exten);
     }
-    const queueNames = [...names];
+    return rows.map((row) => {
+      const id = String(row.id); const managed = dialed.get(id);
+      return { id, extension: managed ?? legacyExtension(id), context: String(row.context), callerId: nullable(row.callerid), transport: nullable(row.transport), aors: nullable(row.aors), managed: managed !== undefined };
+    });
+  }
+  async queues(context: string): Promise<PbxQueue[]> {
+    const queueNames = await ownedQueueNames(this.query, context);
     if (!queueNames.length) return [];
     const placeholders = queueNames.map(() => '?').join(',');
     const queues = bounded(await this.query(`SELECT name, strategy FROM queues WHERE BINARY name IN (${placeholders}) ORDER BY name LIMIT 1001`, queueNames));
-    // Queue names are also the provisioning allowlist, so deleted/not-yet-created
-    // names are valid omissions rather than an inventory dependency failure.
+    // A marker whose queue row was deleted or not yet created is a valid omission, not an inventory dependency failure.
     const members = bounded(await this.query(`SELECT queue_name, interface, membername, penalty, paused FROM queue_members WHERE BINARY queue_name IN (${placeholders}) ORDER BY queue_name, interface LIMIT 1001`, queueNames));
     return queues.map((row) => ({ id: String(row.name), name: String(row.name), strategy: nullable(row.strategy),
       members: members.filter((member) => member.queue_name === row.name).map((member) => ({
@@ -97,34 +74,43 @@ export class PbxInventoryReader implements InventoryReader {
   }
 }
 
-export function mysqlPbxInventory(config: RuntimeMysqlConfig, includeManagedQueues = false): { reader: InventoryReader; close: () => Promise<void> } {
+export function mysqlPbxInventory(config: RuntimeMysqlConfig): { reader: InventoryReader; close: () => Promise<void> } {
   const pool = mysql.createPool({ ...config, connectionLimit: 2, connectTimeout: 4000 });
   return { reader: new PbxInventoryReader(async (sql, values) => {
     const [rows] = await pool.execute({ sql, timeout: 4000 }, values);
     return rows as Record<string, unknown>[];
-  }, includeManagedQueues), close: () => pool.end() };
+  }), close: () => pool.end() };
 }
 
-export function pbxInventoryRoutes(reader: InventoryReader, scopes: PbxTenantScopes, enabled: boolean, provisioningEnabled = false): Route[] {
-  return (['extensions', 'queues'] as const).map((kind) => ({
+/** Exactly one context query value. The retired tenant parameter is refused so no caller silently keeps tenant scope. */
+export function contextQuery(query: URLSearchParams | undefined, name: 'context' | 'didContext' = 'context'): string {
+  if (query?.has('iTenantId')) throw new ValidationError('iTenantId is retired; supply context');
+  const values = query?.getAll(name) ?? [];
+  if (values.length !== 1 || !CONTEXT_RE.test(values[0]!)) throw new ValidationError(`${name} must be exactly one Asterisk context name`);
+  return values[0]!;
+}
+const unavailable = (message: string) => ({ status: 503, body: { error: 'pbx_inventory_unavailable', message } });
+
+export function pbxInventoryRoutes(reader: InventoryReader, enabled: boolean, pbxInstanceId: string, provisioningEnabled = false): Route[] {
+  const contexts: Route = { method: 'GET', pattern: '/v1/admin/pbx/contexts', operationsAccess: { scope: 'platform' }, handler: async (req) => {
+    if (req.query?.has('iTenantId')) throw new ValidationError('iTenantId is retired; supply context');
+    if (!enabled) return unavailable('Configure the PBX inventory connection');
+    try { return { status: 200, body: { source: 'asterisk', pbxInstanceId, contexts: await reader.contexts() } }; }
+    catch { return unavailable('Check the PBX read grants and realtime schema in OfficePulse'); }
+  } };
+  return [contexts, ...(['extensions', 'queues'] as const).map((kind): Route => ({
     method: 'GET', pattern: `/v1/admin/pbx/${kind}`,
-    operationsAccess: { scope: 'tenant-query' as const, query: 'iTenantId' },
+    operationsAccess: { scope: 'context-query', query: 'context' },
     handler: async (req) => {
-      const ids = req.query?.getAll('iTenantId') ?? [];
-      const id = ids[0] ?? '';
-      if (ids.length !== 1 || !/^[1-9][0-9]*$/.test(id) || !Number.isSafeInteger(Number(id))) throw new ValidationError('iTenantId must be a positive canonical Identity tenant ID');
-      const scope = scopes.get(id);
-      if (!enabled || !scope) return { status: 503, body: { error: 'pbx_inventory_unavailable', message: 'Configure the PBX connection and an operator-approved tenant inventory scope' } };
+      const context = contextQuery(req.query);
+      if (!enabled) return unavailable('Configure the PBX inventory connection');
       try {
-        const records = await reader[kind](scope);
-        const items = records.map(record => ({ ...record, applyState: 'unknown', ...(kind === 'extensions' ? {
-          extension: new RegExp(`^([0-9]{2,12})-t${id}$`).exec(record.id)?.[1] ?? (/^[0-9]{2,12}$/.test(record.id) ? record.id : null),
-        } : {}) }));
-        return { status: 200, body: { source: 'asterisk', iTenantId: Number(id), provisioningEnabled,
-          ...(kind === 'extensions' ? { contexts: scope.contexts } : {}), [kind]: items } };
+        const items = (await reader[kind](context)).map(record => ({ ...record, applyState: 'unknown' }));
+        return { status: 200, body: { source: 'asterisk', pbxInstanceId, context, provisioningEnabled,
+          ...(kind === 'extensions' ? { contexts: [context] } : {}), [kind]: items } };
       } catch {
-        return { status: 503, body: { error: 'pbx_inventory_unavailable', message: 'Check the PBX read grants, realtime schema and tenant inventory scope in OfficePulse' } };
+        return unavailable('Check the PBX read grants and realtime schema in OfficePulse');
       }
     },
-  }));
+  }))];
 }

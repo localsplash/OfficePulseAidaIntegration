@@ -23,14 +23,17 @@ function harness(): Harness {
   runtime.seedSession({
     id: CALL_ID,
     tenantId: 'tenant-1',
+    officePulseInstanceId: 'op-test',
+    pbxContext: 'office-main',
     destinationType: 'EXTENSION',
     destinationId: 'ext-1',
   });
   const takeoverCalls: unknown[] = [];
   const deps = {
     runtime,
-    destinationResolver: { async resolveDestination(_type: string, id: string, tenantId: string) {
-      return id === 'ext-1' && tenantId === 'tenant-1' ? { context: 'office-main', exten: '100' } : undefined;
+    // The resolver receives the call's pinned routing scope, never a tenant or a request value.
+    destinationResolver: { async resolveDestination(_type: string, id: string, scope: { pbxInstanceId: string; context: string }) {
+      return id === 'ext-1' && scope.pbxInstanceId === 'op-test' && scope.context === 'office-main' ? { context: 'office-main', exten: '100' } : undefined;
     } },
     takeover: {
       async takeover(command: unknown) {
@@ -144,9 +147,23 @@ test('a missing idempotency key is refused before anything runs', async () => {
   assert.equal(h.runtime.commands.size, 0);
 });
 
-test('a failed command is recorded as failed so a replay does not silently succeed', async () => {
+test('a call without a pinned PBX context cannot be taken over into any destination', async () => {
   const runtime = new FakeRuntimeStore();
   runtime.seedSession({ id: CALL_ID, tenantId: 'tenant-1', destinationType: 'EXTENSION', destinationId: 'ext-1' });
+  let resolved = 0;
+  const routes = buildRoutes({
+    runtime,
+    destinationResolver: { async resolveDestination() { resolved++; return { context: 'office-main', exten: '100' }; } },
+    takeover: { async takeover() { throw new Error('unreached'); } },
+    defaultRingTimeoutSeconds: 20,
+  } as unknown as RouteDeps);
+  await assert.rejects(call(routes, 'POST', `/v1/calls/${CALL_ID}/commands`, TAKEOVER), /no pinned PBX context/);
+  assert.equal(resolved, 0);
+});
+
+test('a failed command is recorded as failed so a replay does not silently succeed', async () => {
+  const runtime = new FakeRuntimeStore();
+  runtime.seedSession({ id: CALL_ID, tenantId: 'tenant-1', pbxContext: 'office-main', destinationType: 'EXTENSION', destinationId: 'ext-1' });
   // Destination is not available locally, so resolution fails.
   const routes = buildRoutes({
     runtime,

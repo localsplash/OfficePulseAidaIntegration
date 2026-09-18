@@ -47,15 +47,22 @@ export interface Route {
   /**
    * Explicitly exposes this private Admin route through the authenticated
    * Operations browser gateway. Future routes stay server-only until their
-   * tenant authorization strategy is declared here.
+   * authorization strategy is declared here. The gateway already restricts
+   * every request to Identity Super Admins: context-query and platform
+   * scopes validate grammar only, while call-session stays tenant-based
+   * because a call belongs to a customer.
    */
   operationsAccess?:
     | { scope: 'tenant-query'; query: string }
+    | { scope: 'context-query'; query: 'context' }
+    | { scope: 'platform' }
     | { scope: 'call-session'; param: string };
 }
 
 export interface HttpApiOptions {
   documentation?: boolean;
+  /** Reported by /readyz so a client can pin the routing scope {pbxInstanceId, context} it administers. */
+  pbxInstanceId?: string;
   logger: Logger;
   readiness: Readiness;
   trustedServerCidrs: readonly string[];
@@ -185,7 +192,7 @@ export class HttpApi {
       }
       if (path === '/readyz') {
         const snapshot = this.opts.readiness.snapshot();
-        this.send(res, snapshot.ready ? 200 : 503, snapshot, correlationId);
+        this.send(res, snapshot.ready ? 200 : 503, { ...(this.opts.pbxInstanceId ? { pbxInstanceId: this.opts.pbxInstanceId } : {}), ...snapshot }, correlationId);
         return;
       }
 

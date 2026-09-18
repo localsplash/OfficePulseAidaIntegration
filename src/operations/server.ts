@@ -2,7 +2,7 @@ import http from 'node:http';
 import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
 import type { OperationsConfig } from './config.js';
 import type { OperationsIdentity } from './identity.js';
-import type { InventoryReader, PbxTenantScopes } from '../pbx/inventory.js';
+import type { InventoryReader } from '../pbx/inventory.js';
 import type { RuntimeStore } from '../runtime/store.js';
 import type { Readiness } from '../readiness.js';
 import type { LivePbx } from './live.js';
@@ -27,7 +27,8 @@ export interface OperationsDependencies {
   readiness: Readiness;
   live: LivePbx;
   inventory?: InventoryReader;
-  scopes: PbxTenantScopes;
+  /** Serving PBX instance; with a context it names the routing scope every inventory read is bound to. */
+  pbxInstanceId: string;
   runtime: Pick<RuntimeStore, 'getCallSession' | 'listCallEvents'>;
   adminRoutes?: readonly Route[];
   now?: () => number;
@@ -134,9 +135,10 @@ export class OperationsServer {
       await this.deps.identity.revoke(token);
       res.setHeader('set-cookie',cookie(SESSION,'',0));return this.send(res,200,{ok:true});
     }
+    // Tenants remain customer identity for call authorization; PBX inventory is scoped by context, not tenant.
     const tenants = (actor.tenants ?? []).filter(t => t.bEnabled);
     if (path === '/ops/api/session' && req.method === 'GET') return this.send(res,200,{user:actor.user,csrfToken:csrf(token),
-      tenants:tenants.map(t=>({id:t.iTenantId,name:t.name,mapped:this.deps.scopes.has(String(t.iTenantId))})),apiUrl:this.config.apiUrl});
+      tenants:tenants.map(t=>({id:t.iTenantId,name:t.name})),apiUrl:this.config.apiUrl});
     if (path === '/ops/api/status' && req.method === 'GET') return this.send(res,200,{dependencies:this.deps.readiness.snapshot(),pbx:await this.deps.live.snapshot(),observedAt:new Date().toISOString()});
     if (path.startsWith('/ops/api/v1/admin/')) {
       const method=(req.method ?? 'GET').toUpperCase();
@@ -150,23 +152,26 @@ export class OperationsServer {
       } catch (error) { return this.sendGatewayError(res,error); }
     }
     if (req.method !== 'GET') return this.send(res,405,{error:'This operations route does not accept mutations.'});
-    const match = /^\/ops\/api\/tenants\/([1-9][0-9]*)\/(extensions|queues|calls\/([A-Za-z0-9_.:-]{1,160}))$/.exec(path);
-    if (!match || !Number.isSafeInteger(Number(match[1]))) return this.send(res,404,{error:'Not found'});
-    const tenantId=match[1]!,kind=match[2]!;
-    if (!tenants.some(t=>String(t.iTenantId)===tenantId)) return this.send(res,403,{error:'Tenant access denied.'});
-    if (kind.startsWith('calls/')) {
-      const call=await this.deps.runtime.getCallSession(match[3]!);
+    const lookup = /^\/ops\/api\/tenants\/([1-9][0-9]*)\/calls\/([A-Za-z0-9_.:-]{1,160})$/.exec(path);
+    if (lookup) {
+      const tenantId=lookup[1]!;
+      if (!Number.isSafeInteger(Number(tenantId))) return this.send(res,404,{error:'Not found'});
+      if (!tenants.some(t=>String(t.iTenantId)===tenantId)) return this.send(res,403,{error:'Tenant access denied.'});
+      const call=await this.deps.runtime.getCallSession(lookup[2]!);
       if (!call || String(call.tenantId)!==tenantId) return this.send(res,404,{error:'No observed integration call found for this tenant and ID.'});
       const events=await this.deps.runtime.listCallEvents(call.id);
-      return this.send(res,200,{call:{id:call.id,tenantId:call.tenantId,state:call.state,disposition:call.disposition,
-        callerNumber:call.callerNumber,didE164:call.didE164,createdAt:call.createdAt,endedAt:call.endedAt},
+      return this.send(res,200,{call:{id:call.id,tenantId:call.tenantId,pbxInstanceId:call.officePulseInstanceId,pbxContext:call.pbxContext,ingressContext:call.ingressContext,
+        state:call.state,disposition:call.disposition,callerNumber:call.callerNumber,didE164:call.didE164,createdAt:call.createdAt,endedAt:call.endedAt},
         events:events.map(e=>({eventType:e.eventType,sequenceNumber:e.sequenceNumber,createdAt:e.createdAt}))});
     }
-    const scope=this.deps.scopes.get(tenantId);
-    if (!scope || !this.deps.inventory) return this.send(res,503,{error:'Native PBX inventory is not mapped for this tenant.'});
+    const scope = /^\/ops\/api\/contexts(?:\/([a-zA-Z0-9_.-]{1,40})\/(extensions|queues))?$/.exec(path);
+    if (!scope) return this.send(res,404,{error:'Not found'});
+    if (!this.deps.inventory) return this.send(res,503,{error:'Native PBX inventory is not configured.'});
+    const context=scope[1], kind=scope[2];
     try {
-      const result=kind==='extensions'?await this.deps.inventory.extensions(scope):await this.deps.inventory.queues(scope);
-      return this.send(res,200,{source:'asterisk',iTenantId:Number(tenantId),[kind]:result});
-    } catch { return this.send(res,503,{error:'Cannot read native PBX inventory. Check the PBX connection and tenant scope.'}); }
+      if (!context) return this.send(res,200,{source:'asterisk',pbxInstanceId:this.deps.pbxInstanceId,contexts:await this.deps.inventory.contexts()});
+      const result=kind==='extensions'?await this.deps.inventory.extensions(context):await this.deps.inventory.queues(context);
+      return this.send(res,200,{source:'asterisk',pbxInstanceId:this.deps.pbxInstanceId,context,[kind!]:result});
+    } catch { return this.send(res,503,{error:'Cannot read native PBX inventory. Check the PBX connection, grants and context.'}); }
   }
 }

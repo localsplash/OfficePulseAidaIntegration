@@ -1,30 +1,34 @@
 import { randomBytes } from 'node:crypto';
-import { queueMarkerData as markerData, queueMarkerExten as markerExten } from './queueOwnership.js';
+import { queueMarkerData as markerData, queueMarkerExten as markerExten, ownedQueueNames, queueOwner, type MarkerQuery } from './queueOwnership.js';
 import mysql from 'mysql2/promise';
 import type { ResultSetHeader } from 'mysql2';
 import { ConflictError, DependencyUnavailableError, NotFoundError, ValidationError } from '../errors.js';
 import type { RuntimeMysqlConfig } from '../runtime/mysqlRuntimeStore.js';
-import type { PbxTenantScope } from './inventory.js';
-import { recognizeDidRows, type DialplanRow } from './managedDid.js';
+import { dialedEndpoint } from './inventory.js';
+import { NAME_RE, recognizeDidRows, type DialplanRow } from './managedDid.js';
 
 export interface ExtensionCreate {
   extension: string; endpointId: string; context: string; displayName?: string; callerIdNumber?: string;
 }
 export interface QueueCreate { name: string; strategy: string }
 export interface QueueMember {
-  queue: string; extension: string; endpointId: string; context: string; penalty: number; paused: boolean;
+  queue: string; extension: string; context: string; penalty: number; paused: boolean;
 }
 export interface DidInventory { did: string; rows: DialplanRow[] }
+/** Every operation is scoped by one extension context; ownership comes from Asterisk's own rows, never a tenant map. */
 export interface PbxProvisioner {
   createExtension(input: ExtensionCreate): Promise<{ extension: string; sipUsername: string; sipSecret: string }>;
-  deleteExtension(extension: string, endpointId: string, contexts: readonly string[]): Promise<void>;
-  createQueue(input: QueueCreate, scope: PbxTenantScope): Promise<void>;
-  deleteQueue(name: string, scope: PbxTenantScope): Promise<void>;
-  setQueueMember(input: QueueMember, scope: PbxTenantScope): Promise<void>;
-  deleteQueueMember(queue: string, extension: string, endpointId: string, scope: PbxTenantScope): Promise<void>;
-  listDids(context: string, dids: readonly string[]): Promise<DidInventory[]>;
-  setDid(context: string, did: string, queue: string, rows: DialplanRow[], scope: PbxTenantScope): Promise<void>;
-  deleteDid(context: string, did: string): Promise<void>;
+  /** The endpoint id is resolved from the context's managed Dial route, so legacy `<ext>-t<N>` bundles keep working. */
+  deleteExtension(extension: string, context: string): Promise<void>;
+  /** Returns the native queue id: the exact name when this context already owns it, else `<context>.<slug>`. */
+  createQueue(input: QueueCreate, context: string): Promise<{ name: string }>;
+  deleteQueue(name: string, context: string): Promise<void>;
+  setQueueMember(input: QueueMember): Promise<void>;
+  deleteQueueMember(queue: string, extension: string, context: string): Promise<void>;
+  ownedQueues(context: string): Promise<string[]>;
+  listDids(didContext: string, dids: readonly string[]): Promise<DidInventory[]>;
+  setDid(didContext: string, did: string, queue: string, rows: DialplanRow[], context: string): Promise<void>;
+  deleteDid(didContext: string, did: string, context: string): Promise<void>;
 }
 
 type SqlConnection = Pick<mysql.PoolConnection, 'execute'>;
@@ -50,6 +54,7 @@ async function read(conn: SqlConnection, sql: string, values: readonly (string |
   const [rows] = await conn.execute({ sql, timeout: 4000 }, [...values]);
   return rows as DbRow[];
 }
+const reader = (conn: SqlConnection): MarkerQuery => (sql, values) => read(conn, sql, values);
 async function execute(conn: SqlConnection, sql: string, values: readonly (string | number)[]): Promise<ResultSetHeader> {
   const [result] = await conn.execute({ sql, timeout: 4000 }, [...values]);
   return result as ResultSetHeader;
@@ -93,31 +98,29 @@ export class MysqlPbxProvisioner implements PbxProvisioner {
     } finally { conn?.release(); }
   }
 
-  private async ownedQueue(conn: SqlConnection, name: string, scope: PbxTenantScope): Promise<void> {
-    const missing = () => new NotFoundError('Queue was not found in this tenant');
+  private async ownedQueue(conn: SqlConnection, name: string, context: string): Promise<void> {
+    const missing = () => new NotFoundError('Queue was not found in this context');
     // The queue row serializes membership changes, DID writes and queue deletion.
     const queues = await read(conn, 'SELECT name FROM queues WHERE BINARY name = ? LIMIT 1 FOR UPDATE', [name]);
     if (!queues.length) throw missing();
-    if (scope.queueNames.includes(name)) return;
-    if (!scope.contexts.length) throw missing();
-    const markers = await read(conn,
-      `SELECT priority, app, appdata FROM extensions WHERE BINARY context IN (${placeholders(scope.contexts)}) AND BINARY exten = ? LIMIT 2 FOR UPDATE`,
-      [...scope.contexts, markerExten(name)]);
-    if (markers.length !== 1 || Number(markers[0]!.priority) !== 1 || markers[0]!.app !== 'NoOp' || markers[0]!.appdata !== markerData(name)) throw missing();
+    // Exactly one marker row, and it must sit in this context; a duplicate elsewhere is ambiguous and owned by nobody.
+    if (await queueOwner(reader(conn), name, true) !== context) throw missing();
   }
 
-  private async ownedEndpoint(conn: SqlConnection, extension: string, endpointId: string, contexts: readonly string[]): Promise<DbRow> {
-    if (!contexts.length) throw new NotFoundError('Extension was not found in this tenant');
-    const rows = await read(conn,
-      `SELECT id, context, auth, aors FROM ps_endpoints WHERE BINARY id = ? AND BINARY context IN (${placeholders(contexts)}) LIMIT 1 FOR UPDATE`,
-      [endpointId, ...contexts]);
-    if (!rows.length) throw new NotFoundError(`Extension ${extension} was not found in this tenant`);
-    return rows[0]!;
+  /** The endpoint dialed by this context's managed route for the extension. Absent and foreign routes are the same 404. */
+  private async managedEndpoint(conn: SqlConnection, extension: string, context: string): Promise<{ id: string; rows: DialplanRow[]; endpoint: DbRow }> {
+    const missing = () => new NotFoundError('Extension was not found in this context');
+    const rows = await lockDialplan(conn, context, extension);
+    const id = rows[0]?.priority === 1 && rows[0].app === 'Dial' ? dialedEndpoint(rows[0].appdata) : undefined;
+    if (!id) throw missing();
+    const endpoints = await read(conn, 'SELECT id, context, auth, aors FROM ps_endpoints WHERE BINARY id = ? AND BINARY context = ? LIMIT 1 FOR UPDATE', [id, context]);
+    if (!endpoints.length) throw missing();
+    return { id, rows, endpoint: endpoints[0]! };
   }
 
   createExtension(input: ExtensionCreate): Promise<{ extension: string; sipUsername: string; sipSecret: string }> {
     const callerId = input.displayName ? `"${input.displayName}" <${input.callerIdNumber ?? input.extension}>` : (input.callerIdNumber ?? input.extension);
-    if (input.context.length > 40 || input.extension.length > 40 || callerId.length > 40) {
+    if (input.context.length > 40 || input.extension.length > 40 || input.endpointId.length > 40 || callerId.length > 40) {
       return Promise.reject(new ValidationError('Extension values exceed the installed Asterisk 40-character columns'));
     }
     return this.transaction(async conn => {
@@ -132,13 +135,11 @@ export class MysqlPbxProvisioner implements PbxProvisioner {
     });
   }
 
-  deleteExtension(extension: string, endpointId: string, contexts: readonly string[]): Promise<void> {
+  deleteExtension(extension: string, context: string): Promise<void> {
     return this.transaction(async conn => {
-      const endpoint = await this.ownedEndpoint(conn, extension, endpointId, contexts);
-      const context = String(endpoint.context);
+      const { id: endpointId, rows, endpoint } = await this.managedEndpoint(conn, extension, context);
       if (endpoint.auth !== endpointId || endpoint.aors !== endpointId) throw new ConflictError('Extension uses a shared or unmanaged auth/AOR bundle');
-      const rows = await lockDialplan(conn, context, extension);
-      if (JSON.stringify(rows) !== JSON.stringify(extensionRows(endpointId))) throw new ConflictError('Extension has an unmanaged or missing dialplan route');
+      if (JSON.stringify(rows) !== JSON.stringify(extensionRows(endpointId))) throw new ConflictError('Extension has an unmanaged dialplan route');
       // Auth and AOR references are lists in native PJSIP, so exact id equality alone is insufficient.
       const references = await read(conn,
         `SELECT id FROM ps_endpoints WHERE BINARY id <> ? AND (FIND_IN_SET(?, BINARY REPLACE(COALESCE(auth, ''), ' ', '')) > 0 OR FIND_IN_SET(?, BINARY REPLACE(COALESCE(outbound_auth, ''), ' ', '')) > 0 OR FIND_IN_SET(?, BINARY REPLACE(COALESCE(aors, ''), ' ', '')) > 0) LIMIT 1 FOR UPDATE`,
@@ -162,19 +163,29 @@ export class MysqlPbxProvisioner implements PbxProvisioner {
     });
   }
 
-  createQueue(input: QueueCreate, scope: PbxTenantScope): Promise<void> {
+  createQueue(input: QueueCreate, context: string): Promise<{ name: string }> {
     return this.transaction(async conn => {
-      const context = scope.contexts[0];
-      if (!context) throw new ValidationError('Queue creation requires an approved tenant context');
-      await execute(conn, 'INSERT INTO queues (name, strategy) VALUES (?, ?)', [input.name, input.strategy]);
-      if ((await lockDialplan(conn, context, markerExten(input.name))).length) throw new ConflictError('Queue ownership marker is already in use');
-      await insertDialplan(conn, context, markerExten(input.name), [{ priority: 1, app: 'NoOp', appdata: markerData(input.name) }]);
+      // An adopted legacy name keeps its exact native id; anything else is namespaced by its context.
+      const owned = await queueOwner(reader(conn), input.name, true) === context;
+      let name = input.name;
+      if (!owned) {
+        if (input.name.length > 60) throw new ValidationError('queue friendly name must be at most 60 characters');
+        name = `${context}.${input.name}`;
+        if (!NAME_RE.test(name)) throw new ValidationError('native queue ID exceeds 80 characters');
+      }
+      await execute(conn, 'INSERT INTO queues (name, strategy) VALUES (?, ?)', [name, input.strategy]);
+      if (owned) return { name };
+      // A marker for this id in any context, including a foreign one, would make ownership ambiguous.
+      const markers = await read(conn, "SELECT context FROM extensions WHERE BINARY exten = ? AND priority = 1 AND app = 'NoOp' AND BINARY appdata = ? LIMIT 2 FOR UPDATE", [markerExten(name), markerData(name)]);
+      if (markers.length || (await lockDialplan(conn, context, markerExten(name))).length) throw new ConflictError('Queue ownership marker is already in use');
+      await insertDialplan(conn, context, markerExten(name), [{ priority: 1, app: 'NoOp', appdata: markerData(name) }]);
+      return { name };
     });
   }
 
-  deleteQueue(name: string, scope: PbxTenantScope): Promise<void> {
+  deleteQueue(name: string, context: string): Promise<void> {
     return this.transaction(async conn => {
-      await this.ownedQueue(conn, name, scope);
+      await this.ownedQueue(conn, name, context);
       // Locking read sees current committed routes after obtaining the queue lock, including at REPEATABLE READ.
       const references = await read(conn,
         "SELECT exten FROM extensions WHERE (BINARY app = ? AND LOCATE(?, BINARY appdata) = 1) OR (BINARY app = ? AND BINARY SUBSTRING_INDEX(appdata, ',', 1) = ?) LIMIT 1 FOR UPDATE",
@@ -182,18 +193,17 @@ export class MysqlPbxProvisioner implements PbxProvisioner {
       if (references.length) throw new ConflictError('Queue is still referenced by a DID; change or delete the route first');
       await execute(conn, 'DELETE FROM queue_members WHERE BINARY queue_name = ?', [name]);
       await execute(conn, 'DELETE FROM queues WHERE BINARY name = ?', [name]);
-      if (scope.contexts.length) await execute(conn,
-        `DELETE FROM extensions WHERE BINARY context IN (${placeholders(scope.contexts)}) AND BINARY exten = ? AND priority = ? AND BINARY app = ? AND BINARY appdata = ?`,
-        [...scope.contexts, markerExten(name), 1, 'NoOp', markerData(name)]);
+      await execute(conn,
+        'DELETE FROM extensions WHERE BINARY context = ? AND BINARY exten = ? AND priority = ? AND BINARY app = ? AND BINARY appdata = ?',
+        [context, markerExten(name), 1, 'NoOp', markerData(name)]);
     });
   }
 
-  setQueueMember(input: QueueMember, scope: PbxTenantScope): Promise<void> {
+  setQueueMember(input: QueueMember): Promise<void> {
     return this.transaction(async conn => {
-      await this.ownedQueue(conn, input.queue, scope);
-      if (!scope.contexts.includes(input.context)) throw new NotFoundError('Extension was not found in this tenant');
-      await this.ownedEndpoint(conn, input.extension, input.endpointId, [input.context]);
-      const iface = `PJSIP/${input.endpointId}`;
+      await this.ownedQueue(conn, input.queue, input.context);
+      const { id } = await this.managedEndpoint(conn, input.extension, input.context);
+      const iface = `PJSIP/${id}`;
       // Serialized by the queue lock; delete/insert is idempotent without UPDATE grants or a vendor-specific unique key.
       await execute(conn, 'DELETE FROM queue_members WHERE BINARY queue_name = ? AND BINARY interface = ?', [input.queue, iface]);
       await execute(conn, 'INSERT INTO queue_members (queue_name, interface, membername, penalty, paused) VALUES (?, ?, ?, ?, ?)',
@@ -201,46 +211,57 @@ export class MysqlPbxProvisioner implements PbxProvisioner {
     });
   }
 
-  deleteQueueMember(queue: string, extension: string, endpointId: string, scope: PbxTenantScope): Promise<void> {
+  deleteQueueMember(queue: string, extension: string, context: string): Promise<void> {
     return this.transaction(async conn => {
-      await this.ownedQueue(conn, queue, scope);
-      await this.ownedEndpoint(conn, extension, endpointId, scope.contexts);
-      const result = await execute(conn, 'DELETE FROM queue_members WHERE BINARY queue_name = ? AND BINARY interface = ?', [queue, `PJSIP/${endpointId}`]);
-      if (!result.affectedRows) throw new NotFoundError('Queue membership was not found in this tenant');
+      await this.ownedQueue(conn, queue, context);
+      const { id } = await this.managedEndpoint(conn, extension, context);
+      const result = await execute(conn, 'DELETE FROM queue_members WHERE BINARY queue_name = ? AND BINARY interface = ?', [queue, `PJSIP/${id}`]);
+      if (!result.affectedRows) throw new NotFoundError('Queue membership was not found in this context');
     });
   }
 
-  async listDids(context: string, dids: readonly string[]): Promise<DidInventory[]> {
+  async ownedQueues(context: string): Promise<string[]> {
+    try { return await ownedQueueNames(reader(this.pool), context); }
+    catch (error) { throw safeError(error); }
+  }
+
+  async listDids(didContext: string, dids: readonly string[]): Promise<DidInventory[]> {
     if (!dids.length) return [];
     if (dids.length > 100) throw new ValidationError('DID inventory exceeds the supported authorized Number list size');
     try {
       const rows = await read(this.pool,
         `SELECT exten, priority, app, appdata FROM extensions WHERE BINARY context = ? AND BINARY exten IN (${placeholders(dids)}) ORDER BY exten, priority LIMIT 1001`,
-        [context, ...dids]);
+        [didContext, ...dids]);
       if (rows.length > MAX_ROWS) throw new DependencyUnavailableError('PBX DID inventory exceeds the supported POC size');
       return dids.map(did => ({ did, rows: dialplan(rows.filter(row => row.exten === did)) }));
     } catch (error) { throw safeError(error); }
   }
 
-  setDid(context: string, did: string, queue: string, rows: DialplanRow[], scope: PbxTenantScope): Promise<void> {
+  /** Only a recognized route whose queue this context owns may be replaced or deleted; manual and foreign routes stay put. */
+  private async replaceable(conn: SqlConnection, did: string, existing: DialplanRow[], context: string): Promise<void> {
+    const current = recognizeDidRows(did, existing);
+    if (!current) throw new ConflictError('DID has an unmanaged dialplan route');
+    if (await queueOwner(reader(conn), current.queue, true) !== context) throw new ConflictError('DID route belongs to another context');
+  }
+
+  setDid(didContext: string, did: string, queue: string, rows: DialplanRow[], context: string): Promise<void> {
     return this.transaction(async conn => {
-      if (context !== scope.didContext) throw new ValidationError('DID context is outside this tenant scope');
       const settings = recognizeDidRows(did, rows);
       if (!settings || settings.queue !== queue) throw new ValidationError('DID rows are not a recognized managed route');
-      await this.ownedQueue(conn, queue, scope);
-      const existing = await lockDialplan(conn, context, did);
-      if (existing.length && !recognizeDidRows(did, existing)) throw new ConflictError('DID has an unmanaged dialplan route');
-      await removeDialplan(conn, context, did);
-      await insertDialplan(conn, context, did, rows);
+      await this.ownedQueue(conn, queue, context);
+      const existing = await lockDialplan(conn, didContext, did);
+      if (existing.length) await this.replaceable(conn, did, existing, context);
+      await removeDialplan(conn, didContext, did);
+      await insertDialplan(conn, didContext, did, rows);
     });
   }
 
-  deleteDid(context: string, did: string): Promise<void> {
+  deleteDid(didContext: string, did: string, context: string): Promise<void> {
     return this.transaction(async conn => {
-      const existing = await lockDialplan(conn, context, did);
+      const existing = await lockDialplan(conn, didContext, did);
       if (!existing.length) throw new NotFoundError('Managed DID route was not found');
-      if (!recognizeDidRows(did, existing)) throw new ConflictError('DID has an unmanaged dialplan route');
-      await removeDialplan(conn, context, did);
+      await this.replaceable(conn, did, existing, context);
+      await removeDialplan(conn, didContext, did);
     });
   }
 }

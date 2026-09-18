@@ -32,6 +32,6 @@ test('released migration ledger remains compatible before applying projection cl
   } as unknown as mysql.Connection;
   t.mock.method(mysql, 'createConnection', async () => connection);
   await migrateRuntime({ host: 'not-used', port: 3306, user: 'not-used', password: 'not-used', database: 'aidacalls_db' });
-  assert.deepEqual(checked, [...Object.keys(RELEASED_CHECKSUMS), '004_remove_retired_pbx.sql', '005_agent_admission.sql']);
-  assert.deepEqual(applied, ['004_remove_retired_pbx.sql', '005_agent_admission.sql']);
+  assert.deepEqual(checked, [...Object.keys(RELEASED_CHECKSUMS), '004_remove_retired_pbx.sql', '005_agent_admission.sql', '006_call_scope.sql']);
+  assert.deepEqual(applied, ['004_remove_retired_pbx.sql', '005_agent_admission.sql', '006_call_scope.sql']);
 });

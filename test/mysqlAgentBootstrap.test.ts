@@ -17,18 +17,24 @@ test('real MariaDB bootstrap consumption, lifecycle and event transaction', { sk
   await sql.query(`CREATE DATABASE IF NOT EXISTS \`${database}\``); await sql.query(`USE \`${database}\``);
   await migrateRuntime(config); await migrateRuntime(config);
   const runtime = new MysqlRuntimeStore(config); const store = new MysqlAdmissionStore(config);
-  const fixture = JSON.parse(readFileSync(new URL('./fixtures/bootstrap-v1.json', import.meta.url), 'utf8'));
+  const fixture = JSON.parse(readFileSync(new URL('./fixtures/bootstrap-v2.json', import.meta.url), 'utf8'));
+  const instance: string = fixture.dispatch.pbxInstanceId; const context: string = fixture.dispatch.context;
   const binding = { bootstrapHash: digest(fixture.dispatch.bootstrapToken), routeHash: digest(fixture.request.routeToken), sipIdentity: 'sip-caller', sipSid: 'PA_sip', agentIdentity: 'agent-1', agentSid: 'PA_agent' };
   async function seed() {
     const id = randomUUID(); const roomName = `aida-${id}`;
-    await runtime.createCallSession({ id, roomName, tenantId: '42', asteriskLinkedId: id, officePulseInstanceId: 'op-test', didE164: fixture.response.profileSnapshot.didE164,
-      config: { profileId: 'profile42' }, disposition: 'SCREEN', state: 'screening', destinationType: 'QUEUE', destinationId: 'queue42' });
-    const a: Admission = { callId: id, roomName, tenantId: '42', instanceId: 'op-test', linkedId: id,
+    await runtime.createCallSession({ id, roomName, tenantId: '42', asteriskLinkedId: id, officePulseInstanceId: instance, pbxContext: context, ingressContext: 'from-carrier',
+      didE164: fixture.response.profileSnapshot.didE164, config: { profileId: 'profile42' }, disposition: 'SCREEN', state: 'screening', destinationType: 'QUEUE', destinationId: 'queue42' });
+    const a: Admission = { callId: id, roomName, tenantId: '42', instanceId: instance, pbxInstanceId: instance, context, ingressContext: 'from-carrier', linkedId: id,
       profile: { ...fixture.response.profileSnapshot, callSessionId: id }, bootstrapHash: binding.bootstrapHash, routeHash: binding.routeHash,
       expiresAt: Date.now() + 120000, status: 'pending' };
     await store.create(a); await store.dispatched(id, 'dispatch42'); return (await store.get(id))!;
   }
   try {
+    await t.test('the additive scope migration persists and reads back the pinned contexts', async () => {
+      const a = await seed();
+      const call = await runtime.getCallSession(a.callId);
+      assert.equal(call?.pbxContext, context); assert.equal(call?.ingressContext, 'from-carrier');
+    });
     await t.test('24 concurrent requests yield one success, one binding and one event', async () => {
       const a = await seed();
       const results = await Promise.allSettled(Array.from({ length: 24 }, () => store.consume(a, binding)));
@@ -49,15 +55,15 @@ test('real MariaDB bootstrap consumption, lifecycle and event transaction', { sk
       assert.equal((await runtime.listCallEvents(a.callId)).length, 0);
       assert.deepEqual(await store.consume(a, binding), a.profile);
     });
-    await t.test('wrong hash, expired, altered tenant/room/instance/linkedid and ended calls fail atomically', async () => {
-      for (const field of ['bootstrapHash','routeHash','expiresAt','tenant_id','room_name','officepulse_instance_id','asterisk_linked_id','ended_at','disposition']) {
+    await t.test('wrong hash, expired, altered tenant/room/instance/context/linkedid and ended calls fail atomically', async () => {
+      for (const field of ['bootstrapHash','routeHash','expiresAt','tenant_id','room_name','officepulse_instance_id','pbx_context','asterisk_linked_id','ended_at','disposition']) {
         const a = await seed();
         const b = { ...binding };
         if (field === 'bootstrapHash' || field === 'routeHash') b[field] = digest('wrong');
         else if (field === 'expiresAt') await sql.execute("UPDATE agent_admission SET data=JSON_SET(data,'$.expiresAt',0) WHERE call_id=?", [a.callId]);
-        else await sql.execute(`UPDATE call_session SET ${field}=? WHERE id=?`, [field === 'ended_at' ? new Date() : field === 'disposition' ? 'FALLBACK' : randomUUID(), a.callId]);
-        await assert.rejects(store.consume(a, b), CredentialRejected);
-        assert.equal((await store.get(a.callId))?.status, 'dispatched');
+        else await sql.execute(`UPDATE call_session SET ${field}=? WHERE id=?`, [field === 'ended_at' ? new Date() : field === 'disposition' ? 'FALLBACK' : field === 'pbx_context' ? 'other-office' : randomUUID(), a.callId]);
+        await assert.rejects(store.consume(a, b), CredentialRejected, field);
+        assert.equal((await store.get(a.callId))?.status, 'dispatched', field);
       }
     });
     await t.test('fallback racing consumption prevents subsequent readiness and replay', async () => {

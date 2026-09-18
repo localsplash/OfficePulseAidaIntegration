@@ -1,3 +1,5 @@
+> Historical brief: it predates the context migration (#22/#23). Routes are now scoped by `context` (plus `didContext` on DID routes) rather than `iTenantId`, ownership is derived from Asterisk rows, and `PBX_INVENTORY_TENANTS_JSON` is retired; see `PBX_PROVISIONING.md` and `PBX_SOURCE_OF_TRUTH.md`.
+
 # Agent implementation brief: native PBX provisioning and managed DID routing
 
 ## Objective

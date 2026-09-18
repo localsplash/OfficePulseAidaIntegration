@@ -20,6 +20,11 @@ export interface CallSessionRecord {
   id: string;
   asteriskLinkedId: string;
   officePulseInstanceId: string;
+  /** Extension context owning the routed queue; with officePulseInstanceId it is the call's routing scope (#22). */
+  pbxContext?: string;
+  /** Carrier ingress context the DID arrived in; pinned so ownership can be re-derived from the DID's own rows. */
+  ingressContext?: string;
+  /** Customer identity for authorization and observation, never a routing key. */
   tenantId: string;
   didE164: string;
   callerNumber?: string;
@@ -39,6 +44,8 @@ export interface NewCallSession {
   id: string;
   asteriskLinkedId: string;
   officePulseInstanceId: string;
+  pbxContext?: string;
+  ingressContext?: string;
   tenantId: string;
   didE164: string;
   callerNumber?: string;

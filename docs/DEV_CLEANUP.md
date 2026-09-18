@@ -65,5 +65,5 @@ exercise ARI takeover/reconciliation, signed events and FastAGI fallback. The
 canonical TAKEOVER test proves 503 changes neither command rows nor call version. The disposable runtime database test creates
 retired table fixtures, runs cleanup, verifies their absence and proves existing
 call history survives; rerunning initialization does not recreate removed tables.
-Inventory tests continue to enforce tenant scopes and SELECT-only vendor access.
+Inventory tests continue to enforce context scopes and SELECT-only vendor access.
 No compatibility flag or rollback window is required for this development reset.

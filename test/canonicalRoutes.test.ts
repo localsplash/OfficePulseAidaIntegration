@@ -13,7 +13,7 @@ import { migrateRuntime } from '../src/runtime/migrate.js';
 test('canonical HTTP serves observed calls and has no legacy mutation/admission routes', async () => {
   const runtime = new FakeRuntimeStore();
   const call = runtime.seedSession({ id: 'existing-call', tenantId: '1' });
-  const routes = assembleApiRoutes(pbxInventoryRoutes({ extensions: async () => [], queues: async () => [] }, new Map(), false),
+  const routes = assembleApiRoutes(pbxInventoryRoutes({ contexts: async () => [], extensions: async () => [], queues: async () => [] }, false, 'op-test'),
     voiceAvailability(buildRoutes({ runtime } as unknown as RouteDeps), false));
   assert.ok(routes.every(route => !route.pattern.startsWith('/v1/provisioning/')));
   const options = { logger: captureLogger().logger, readiness: new Readiness(), trustedServerCidrs: ['127.0.0.1/32'], trustedProxyCidrs: [],
@@ -26,7 +26,9 @@ test('canonical HTTP serves observed calls and has no legacy mutation/admission 
     const found = await fetch(`${base}/v1/admin/calls/${call.id}`);
     assert.equal(found.status, 200); assert.equal((await found.json() as { id: string }).id, call.id);
     assert.equal((await fetch(`${base}/v1/admin/calls/missing`)).status, 404);
-    assert.equal((await fetch(`${base}/v1/admin/pbx/extensions?iTenantId=1`)).status, 503);
+    assert.equal((await fetch(`${base}/v1/admin/pbx/extensions?iTenantId=1`)).status, 422, 'the tenant parameter is retired');
+    assert.equal((await fetch(`${base}/v1/admin/pbx/extensions?context=business-one`)).status, 503);
+    assert.equal((await fetch(`${base}/v1/admin/pbx/contexts`)).status, 503);
     for (const path of ['/v1/provisioning/extensions', '/v1/provisioning/ring-groups/group', '/v1/provisioning/dids/did',
       '/v1/provisioning/handsets', '/v1/provisioning/device-enrollments', '/v1/devices/enroll']) {
       assert.equal((await fetch(`${base}${path}`, { method: 'POST' })).status, 404, path);

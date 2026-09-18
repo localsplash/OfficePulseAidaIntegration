@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { ApiRequest, ApiResponse, Route } from '../http/httpServer.js';
 import type { RuntimeStore } from '../runtime/store.js';
 import { ValidationError } from '../errors.js';
+import { CONTEXT_RE } from '../pbx/managedDid.js';
 
 interface CompiledRoute extends Route { regex: RegExp; paramNames: string[] }
 
@@ -37,11 +38,16 @@ export class OperationsAdminGateway {
     if (access.scope === 'tenant-query') {
       const values = input.query.getAll(access.query);
       if (values.length !== 1 || !input.tenantIds.has(values[0]!)) return { status: 403, body: { error: 'Tenant access denied.' } };
-    } else {
+    } else if (access.scope === 'context-query') {
+      // The session is already a Super Admin; a context only selects the scope on this PBX instance, so grammar is all that is checked.
+      const values = input.query.getAll(access.query);
+      if (values.length !== 1 || !CONTEXT_RE.test(values[0]!)) return { status: 422, body: { error: 'context must be exactly one Asterisk context name' } };
+    } else if (access.scope === 'call-session') {
       const call = await this.runtime.getCallSession(params[access.param] ?? '');
       // Do not disclose whether a call belonging to another tenant exists.
       if (!call || !input.tenantIds.has(String(call.tenantId))) return { status: 404, body: { error: 'Call not found.' } };
     }
+    // 'platform' needs nothing beyond the verified Super Admin session.
 
     const request: ApiRequest = { method: input.method, path: input.path, query: input.query, params,
       body: input.body, headers: input.headers, clientIp: input.clientIp, correlationId: randomUUID(), operator: input.operator };

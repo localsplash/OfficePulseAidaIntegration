@@ -1,22 +1,35 @@
 [
   {
-    "name": "listExtensions",
+    "name": "listContexts",
     "method": "GET",
-    "path": "/v1/admin/pbx/extensions?iTenantId=7",
+    "path": "/v1/admin/pbx/contexts",
     "status": 200,
     "response": {
       "source": "asterisk",
-      "iTenantId": 7,
+      "pbxInstanceId": "officepulse-fixture",
+      "contexts": ["from-carrier", "tenant-seven"]
+    }
+  },
+  {
+    "name": "listExtensions",
+    "method": "GET",
+    "path": "/v1/admin/pbx/extensions?context=tenant-seven",
+    "status": 200,
+    "response": {
+      "source": "asterisk",
+      "pbxInstanceId": "officepulse-fixture",
+      "context": "tenant-seven",
       "provisioningEnabled": true,
       "contexts": ["tenant-seven"],
       "extensions": [
         {
-          "id": "100-t7",
+          "id": "100-tenant-seven",
           "extension": "100",
           "context": "tenant-seven",
           "callerId": "Front Desk",
           "transport": "transport-udp",
-          "aors": "100-t7",
+          "aors": "100-tenant-seven",
+          "managed": true,
           "applyState": "unknown"
         }
       ]
@@ -25,11 +38,11 @@
   {
     "name": "createExtension",
     "method": "POST",
-    "path": "/v1/admin/pbx/extensions?iTenantId=7",
+    "path": "/v1/admin/pbx/extensions?context=tenant-seven",
     "status": 201,
     "response": {
       "extension": "100",
-      "sipUsername": "100-t7",
+      "sipUsername": "100-tenant-seven",
       "sipSecret": "fixture-one-time-secret",
       "applyState": "committed"
     },
@@ -43,27 +56,28 @@
   {
     "name": "deleteExtension",
     "method": "DELETE",
-    "path": "/v1/admin/pbx/extensions/100?iTenantId=7",
+    "path": "/v1/admin/pbx/extensions/100?context=tenant-seven",
     "status": 204
   },
   {
     "name": "listQueues",
     "method": "GET",
-    "path": "/v1/admin/pbx/queues?iTenantId=7",
+    "path": "/v1/admin/pbx/queues?context=tenant-seven",
     "status": 200,
     "response": {
       "source": "asterisk",
-      "iTenantId": 7,
+      "pbxInstanceId": "officepulse-fixture",
+      "context": "tenant-seven",
       "provisioningEnabled": true,
       "queues": [
         {
-          "id": "t7.sales",
-          "name": "t7.sales",
+          "id": "tenant-seven.sales",
+          "name": "tenant-seven.sales",
           "strategy": "ringall",
           "applyState": "unknown",
           "members": [
             {
-              "interface": "PJSIP/100-t7",
+              "interface": "PJSIP/100-tenant-seven",
               "memberName": "100",
               "penalty": 3,
               "paused": true
@@ -76,10 +90,10 @@
   {
     "name": "createQueue",
     "method": "POST",
-    "path": "/v1/admin/pbx/queues?iTenantId=7",
+    "path": "/v1/admin/pbx/queues?context=tenant-seven",
     "status": 201,
     "response": {
-      "name": "t7.sales",
+      "name": "tenant-seven.sales",
       "strategy": "ringall",
       "applyState": "committed"
     },
@@ -91,16 +105,16 @@
   {
     "name": "deleteQueue",
     "method": "DELETE",
-    "path": "/v1/admin/pbx/queues/t7.sales?iTenantId=7",
+    "path": "/v1/admin/pbx/queues/tenant-seven.sales?context=tenant-seven",
     "status": 204
   },
   {
     "name": "putQueueMember",
     "method": "PUT",
-    "path": "/v1/admin/pbx/queues/t7.sales/extensions/100?iTenantId=7",
+    "path": "/v1/admin/pbx/queues/tenant-seven.sales/extensions/100?context=tenant-seven",
     "status": 200,
     "response": {
-      "queue": "t7.sales",
+      "queue": "tenant-seven.sales",
       "extension": "100",
       "penalty": 3,
       "paused": true,
@@ -115,23 +129,25 @@
   {
     "name": "deleteQueueMember",
     "method": "DELETE",
-    "path": "/v1/admin/pbx/queues/t7.sales/extensions/100?iTenantId=7",
+    "path": "/v1/admin/pbx/queues/tenant-seven.sales/extensions/100?context=tenant-seven",
     "status": 204
   },
   {
     "name": "listDids",
     "method": "GET",
-    "path": "/v1/admin/pbx/dids?iTenantId=7&authorizedDid=%2B19496501147",
+    "path": "/v1/admin/pbx/dids?context=tenant-seven&didContext=from-carrier&authorizedDid=%2B19496501147",
     "status": 200,
     "response": {
       "source": "asterisk",
-      "iTenantId": 7,
+      "pbxInstanceId": "officepulse-fixture",
+      "context": "tenant-seven",
+      "didContext": "from-carrier",
       "provisioningEnabled": true,
       "dids": [
         {
           "did": "+19496501147",
           "managed": true,
-          "queue": "t7.sales",
+          "queue": "tenant-seven.sales",
           "ringsBeforeAi": 6,
           "schedule": {
             "timeRange": "09:00-17:00",
@@ -148,12 +164,12 @@
   {
     "name": "putDid",
     "method": "PUT",
-    "path": "/v1/admin/pbx/dids/%2B19496501147?iTenantId=7&authorizedDid=%2B19496501147",
+    "path": "/v1/admin/pbx/dids/%2B19496501147?context=tenant-seven&didContext=from-carrier&authorizedDid=%2B19496501147",
     "status": 200,
     "response": {
       "did": "+19496501147",
       "managed": true,
-      "queue": "t7.sales",
+      "queue": "tenant-seven.sales",
       "ringsBeforeAi": 6,
       "schedule": {
         "timeRange": "09:00-17:00",
@@ -165,7 +181,7 @@
       "applyState": "committed"
     },
     "body": {
-      "queue": "t7.sales",
+      "queue": "tenant-seven.sales",
       "ringsBeforeAi": 6,
       "schedule": {
         "timeRange": "09:00-17:00",
@@ -178,7 +194,7 @@
   {
     "name": "deleteDid",
     "method": "DELETE",
-    "path": "/v1/admin/pbx/dids/%2B19496501147?iTenantId=7&authorizedDid=%2B19496501147",
+    "path": "/v1/admin/pbx/dids/%2B19496501147?context=tenant-seven&didContext=from-carrier&authorizedDid=%2B19496501147",
     "status": 204
   }
 ]

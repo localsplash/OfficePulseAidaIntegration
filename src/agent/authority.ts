@@ -1,5 +1,5 @@
 import type { Admission, AdmissionStore } from './store.js';
-import { CredentialRejected, InvalidShape, UUID, TOKEN, digest, sameHash, parseBinding, type BootstrapBinding } from './contract.js';
+import { CredentialRejected, InvalidShape, UUID, TOKEN, digest, sameHash, parseBinding, type BootstrapBinding, type DispatchMetadata } from './contract.js';
 import type { RuntimeStore } from '../runtime/store.js';
 import type { NativeAuthority } from './native.js';
 import type { Route } from '../http/httpServer.js';
@@ -7,7 +7,7 @@ import type { Route } from '../http/httpServer.js';
 export interface Participant { sid: string; identity: string; kind?: string | number; attributes?: Record<string, string> }
 export interface AgentLiveKit {
   listParticipants(room: string): Promise<Participant[]>;
-  dispatchAgent(room: string, metadata: { callSessionId: string; bootstrapToken: string }): Promise<string>;
+  dispatchAgent(room: string, metadata: DispatchMetadata): Promise<string>;
   dispatchIdentity(room: string, dispatchId: string): Promise<string | undefined>;
   createRoom(room: string): Promise<void>;
 }
@@ -30,8 +30,10 @@ export class BootstrapAuthority {
     if (!a || a.status !== 'dispatched' || !a.dispatchId || a.instanceId !== this.opts.instanceId ||
       a.expiresAt <= Date.now() || !sameHash(a.bootstrapHash, digest(token)) || !sameHash(a.routeHash, digest(b.routeToken)) || b.roomName !== a.roomName || a.roomName !== `aida-${id}`) throw new CredentialRejected();
     const call = await this.opts.runtime.getCallSession(id);
+    // The pinned routing scope must agree between admission and call record before ownership is re-derived from Asterisk.
     if (!call || call.endedAt || call.tenantId !== a.tenantId || call.asteriskLinkedId !== a.linkedId || call.disposition !== 'SCREEN' ||
-      !await this.opts.native.authorized(a.tenantId, call.didE164, call.destinationId!, call.config.profileId!)) throw new CredentialRejected();
+      a.pbxInstanceId !== this.opts.instanceId || call.pbxContext !== a.context || call.ingressContext !== a.ingressContext ||
+      !await this.opts.native.authorized({ pbxInstanceId: a.pbxInstanceId, context: a.context, ingressContext: a.ingressContext }, call.didE164, call.destinationId!, call.config.profileId!)) throw new CredentialRejected();
     const { sip, agent } = await this.participants(a, b);
     const profile = await this.opts.store.consume(a, { bootstrapHash: digest(token), routeHash: digest(b.routeToken),
       sipIdentity: sip.identity, sipSid: sip.sid, agentIdentity: agent.identity, agentSid: agent.sid });

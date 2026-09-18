@@ -153,10 +153,11 @@ export class LiveKitClient implements LiveKitApi {
     return { roomName, dispatchId: result?.id };
   }
 
+  /** Dispatch metadata v2: exactly the credential and the routing scope the Agent must echo back at bootstrap. */
   async dispatchAgent(roomName: string, metadata: DispatchMetadata): Promise<string> {
     const result = await this.twirp('AgentDispatchService', 'CreateDispatch', {
       room: roomName, agent_name: this.opts.agentName, restart_policy: 'JRP_NEVER',
-      metadata: JSON.stringify({ callSessionId: metadata.callSessionId, bootstrapToken: metadata.bootstrapToken }),
+      metadata: JSON.stringify({ callSessionId: metadata.callSessionId, bootstrapToken: metadata.bootstrapToken, pbxInstanceId: metadata.pbxInstanceId, context: metadata.context }),
     }, { roomAdmin: true, room: roomName, agent: true }) as { id?: string };
     if (!result?.id) throw new UpstreamError('LiveKit dispatch unavailable', 'livekit');
     return result.id;

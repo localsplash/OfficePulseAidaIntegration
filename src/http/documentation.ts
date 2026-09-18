@@ -8,7 +8,6 @@ import type { ServerResponse } from 'node:http';
 const reference = (name: string) => ({ $ref: '#/components/schemas/' + name });
 const json = (schema: unknown) => ({ 'application/json': { schema } });
 const response = (description: string, schema: unknown = reference('Error')) => ({ description, content: json(schema) });
-const tenant = { name: 'iTenantId', in: 'query', required: true, description: 'Canonical Identity tenant ID with an explicitly configured native PBX scope.', schema: { type: 'integer', minimum: 1 } };
 const callId = { name: 'id', in: 'path', required: true, schema: { type: 'string' } };
 const access = 'Restricted to trusted application backends. A browser session, API key or bearer token does not bypass the network admission policy. AidaAdmin and the operations UI authenticate their human users separately.';
 const privateGet = (summary: string, parameters: unknown[], schema: unknown) => ({
@@ -23,7 +22,7 @@ export const openApi = {
   paths: {
     ...agentPaths,
     '/healthz': { get: { tags: ['Health'], summary: 'Process health', responses: { '200': response('Process is responding', { type: 'object', properties: { status: { type: 'string', example: 'ok' }, version: { type: 'string', example: '2026.9.14.14.30', description: 'Pacific (America/Los_Angeles, PST/PDT) commit timestamp (YYYY.M.D.H.M); -dirty for uncommitted changes; unbuilt in source development mode' }, revision: { type: 'string', nullable: true, description: 'Full Git commit ID' }, sourceUpdatedAt: { type: 'string', format: 'date-time', nullable: true, description: 'Commit time with Pacific UTC offset' }, timeZone: { type: 'string', example: 'America/Los_Angeles' }, dirty: { type: 'boolean', nullable: true } } }) } } },
-    '/readyz': { get: { tags: ['Health'], summary: 'Dependency readiness', description: 'HTTP 200 means critical dependencies are ready. Inspect components.pbx-inventory separately. fullyOperational stays false when voice/native admission is unavailable.', responses: { '200': response('Critical dependencies ready', reference('Readiness')), '503': response('Critical dependency unavailable', reference('Readiness')) } } },
+    '/readyz': { get: { tags: ['Health'], summary: 'Dependency readiness', description: 'HTTP 200 means critical dependencies are ready. Inspect components.pbx-inventory separately. fullyOperational stays false when voice/native admission is unavailable. pbxInstanceId names the serving PBX instance so clients can pin the routing scope they administer.', responses: { '200': response('Critical dependencies ready', reference('Readiness')), '503': response('Critical dependency unavailable', reference('Readiness')) } } },
     ...pbxPaths,
     '/v1/admin/calls/{id}': { get: privateGet('Read an observed integration call', [callId], reference('Call')) },
     '/v1/admin/calls/{id}/events': { get: privateGet('Read integration call events', [callId], { type: 'object', properties: { events: { type: 'array', items: reference('Event') } } }) },
@@ -32,9 +31,9 @@ export const openApi = {
   },
   components: { schemas: {
     Error: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' }, details: { type: 'array', items: { type: 'string' } } } },
-    Readiness: { type: 'object', properties: { ready: { type: 'boolean' }, fullyOperational: { type: 'boolean' }, components: { type: 'object', additionalProperties: { type: 'object', properties: { ready: { type: 'boolean' }, criticality: { type: 'string', enum: ['critical', 'degraded'] }, detail: { type: 'string' }, since: { type: 'string', format: 'date-time' } } } } } },
+    Readiness: { type: 'object', properties: { pbxInstanceId: { type: 'string', pattern: '^[A-Za-z0-9_.-]{1,80}$' }, ready: { type: 'boolean' }, fullyOperational: { type: 'boolean' }, components: { type: 'object', additionalProperties: { type: 'object', properties: { ready: { type: 'boolean' }, criticality: { type: 'string', enum: ['critical', 'degraded'] }, detail: { type: 'string' }, since: { type: 'string', format: 'date-time' } } } } } },
     ...pbxSchemas,
-    Call: { type: 'object', properties: { id: { type: 'string' }, asteriskLinkedId: { type: 'string' }, officePulseInstanceId: { type: 'string' }, tenantId: { type: 'string' }, callerNumber: { type: 'string' }, didE164: { type: 'string' }, state: { type: 'string' }, disposition: { type: 'string' }, version: { type: 'integer' }, createdAt: { type: 'string', format: 'date-time' }, endedAt: { type: 'string', format: 'date-time' }, config: { type: 'object' }, roomName: { type: 'string' }, destinationType: { type: 'string' }, destinationId: { type: 'string' } } },
+    Call: { type: 'object', properties: { id: { type: 'string' }, asteriskLinkedId: { type: 'string' }, officePulseInstanceId: { type: 'string' }, pbxContext: { type: 'string', description: 'Extension context owning the routed queue; with officePulseInstanceId it is the routing scope.' }, ingressContext: { type: 'string', description: 'Carrier ingress context the DID arrived in.' }, tenantId: { type: 'string', description: 'Customer identity for authorization and observation, never a routing key.' }, callerNumber: { type: 'string' }, didE164: { type: 'string' }, state: { type: 'string' }, disposition: { type: 'string' }, version: { type: 'integer' }, createdAt: { type: 'string', format: 'date-time' }, endedAt: { type: 'string', format: 'date-time' }, config: { type: 'object' }, roomName: { type: 'string' }, destinationType: { type: 'string' }, destinationId: { type: 'string' } } },
     Event: { type: 'object', properties: { sequenceNumber: { type: 'integer' }, eventType: { type: 'string' }, createdAt: { type: 'string', format: 'date-time' }, payload: { type: 'object', additionalProperties: true } } },
   } },
 };
@@ -42,7 +41,7 @@ export const openApi = {
 export const operationsOpenApi = {
   ...openApi,
   info: { ...openApi.info,
-    description: 'Authenticated Super Admin access to the explicitly browser-enabled Admin API. Identity authorization is revalidated for every request; tenant scope and CSRF protections are enforced by the Operations gateway.' },
+    description: 'Authenticated Super Admin access to the explicitly browser-enabled Admin API. Identity authorization is revalidated for every request; context grammar, tenant-based call authorization and CSRF protections are enforced by the Operations gateway.' },
   servers: [{ url: '/ops/api', description: 'Authenticated Operations gateway' }],
   security: [{ operationsSession: [] }],
   paths: Object.fromEntries(Object.entries(openApi.paths).filter(([path]) => path.startsWith('/v1/admin/'))),

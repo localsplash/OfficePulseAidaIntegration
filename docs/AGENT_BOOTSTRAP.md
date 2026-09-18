@@ -20,7 +20,7 @@ been exercised.
 ## Configuration and authorization
 
 Admission is opt-in with `NATIVE_ADMISSION_ENABLED=true`, `VOICE_ENABLED=true`,
-`PBX_INVENTORY_ENABLED=true`, `FASTAGI_BIND=127.0.0.1`, an HTTPS `ID_BASE_URL`,
+`PBX_INVENTORY_ENABLED=true`, `FASTAGI_BIND=127.0.0.1`, an HTTPS Identity origin (see [Identity base URL](#identity-base-url)),
 a configured `LIVEKIT_TRUNK_ENDPOINT`, and an explicit `LIVEKIT_AGENT_NAME`
 (such as `aida-prime-bootstrap-dev`). The legacy `aida-prime` name is rejected.
 Use the same dispatch name in the repository-owned Agent worker. Its deployment
@@ -85,6 +85,23 @@ application. CIDR admission remains supported when Identity is configured for
 trusted application networks. No staff session is used for calls. Rejected or
 unavailable checks log a sanitized warning containing only the tenant ID and
 HTTP status; no credential or response body is logged.
+
+### Identity base URL
+
+The origin that check calls is not configured separately (#20). In PlatformConfig
+mode the startup settings reader resolves it from the Identity application's own
+`cfg_tbl_Setting` record (`app = identity`, `settingKey = APP_BASE_URL`), validates
+it as an HTTPS origin and passes it to the agent configuration as `ID_BASE_URL`.
+Never set `ID_BASE_URL` by hand in that mode: a nonblank value in the environment
+or in any `*`/`aida`/`officepulse` scope row fails startup as a retired override,
+so a stale copy cannot point the tenant check at another environment. A missing
+or blank record means admission does not start and the error names
+`identity/APP_BASE_URL`; duplicate or malformed records and a NocoDB failure
+during the lookup fail startup explicitly instead of falling back to a hostname or
+another application's URL. `PLATFORM_CONFIG_MODE=environment` is the retained
+environment-only mode in which `ID_BASE_URL` is read from the environment. The
+record is read once at startup, so a central change takes effect at the next
+restart; there is no hot reload. Diagnostics never print the value.
 
 `AGENT_STARTUP_TIMEOUT_SECONDS` defaults to 30 (range 1–60). Both independently
 generated 256-bit credentials expire after 120 seconds; startup has its own

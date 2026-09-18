@@ -107,7 +107,7 @@ export class AgentMonitor implements RoomMonitor {
       if (a.status !== 'ready' && Date.now() >= entry.deadline) { await this.fail(id); return; }
       if (a.status === 'ready' || a.status === 'admitted') {
         await this.opts.authority.participants(a);
-        if (!await native.authorized(a.tenantId, c.didE164, c.destinationId!, c.config.profileId!)) await this.fail(id);
+        if (!await native.authorized({ pbxInstanceId: a.pbxInstanceId, context: a.context, ingressContext: a.ingressContext }, c.didE164, c.destinationId!, c.config.profileId!)) await this.fail(id);
       }
     } finally { entry.busy = false; }
   }

@@ -7,8 +7,8 @@ import { NotFoundError, ValidationError } from '../errors.js';
 export interface RouteDeps {
   takeover: TakeoverManager;
   runtime: RuntimeStore;
-  /** An adapter must validate native PBX destinations for this tenant; canonical startup has none yet. */
-  destinationResolver?: { resolveDestination(type: 'EXTENSION' | 'QUEUE', id: string, tenantId: string): Promise<{ context: string; exten: string } | undefined> };
+  /** An adapter must validate native PBX destinations inside the call's routing scope; canonical startup has none yet. */
+  destinationResolver?: { resolveDestination(type: 'EXTENSION' | 'QUEUE', id: string, scope: { pbxInstanceId: string; context: string }): Promise<{ context: string; exten: string } | undefined> };
   webhooks: LiveKitWebhookHandler;
   defaultRingTimeoutSeconds: number;
 }
@@ -128,13 +128,13 @@ export function buildRoutes(deps: RouteDeps): Route[] {
 async function runTakeover(
   deps: RouteDeps,
   callSessionId: string,
-  session: { destinationType?: string; destinationId?: string; tenantId: string },
+  session: { destinationType?: string; destinationId?: string; officePulseInstanceId: string; pbxContext?: string },
   body: Record<string, unknown>,
   idempotencyKey: string,
 ): Promise<unknown> {
   // The destination comes from the call session pinned at bootstrap, not
   // from the request: a command may not redirect a call to an arbitrary
-  // extension, and certainly not to another tenant's.
+  // extension, and certainly not to another context's.
   const destinationType = (body.destinationType as string | undefined) ?? session.destinationType;
   const destinationId = (body.destinationId as string | undefined) ?? session.destinationId;
   if (destinationType !== 'EXTENSION' && destinationType !== 'QUEUE') {
@@ -148,8 +148,10 @@ async function runTakeover(
     throw new ValidationError("takeover destination does not match this call's pinned destination");
   }
 
-  const target = await deps.destinationResolver!.resolveDestination(destinationType, destinationId, session.tenantId);
-  if (!target) throw new NotFoundError(`destination ${destinationId} is not available for this tenant`);
+  // The scope is the PBX instance and extension context pinned on the call, never a request value.
+  if (!session.pbxContext) throw new NotFoundError(`destination ${destinationId} has no pinned PBX context on this call`);
+  const target = await deps.destinationResolver!.resolveDestination(destinationType, destinationId, { pbxInstanceId: session.officePulseInstanceId, context: session.pbxContext });
+  if (!target) throw new NotFoundError(`destination ${destinationId} is not available in this call's PBX scope`);
 
   return deps.takeover.takeover({
     callSessionId,

@@ -50,6 +50,8 @@ interface CallSessionRow {
   id: string;
   asterisk_linked_id: string;
   officepulse_instance_id: string;
+  pbx_context: string | null;
+  ingress_context: string | null;
   tenant_id: string;
   did_e164: string;
   caller_number: string | null;
@@ -74,6 +76,8 @@ function toSession(row: CallSessionRow): CallSessionRecord {
     id: row.id,
     asteriskLinkedId: row.asterisk_linked_id,
     officePulseInstanceId: row.officepulse_instance_id,
+    pbxContext: row.pbx_context ?? undefined,
+    ingressContext: row.ingress_context ?? undefined,
     tenantId: row.tenant_id,
     didE164: row.did_e164,
     callerNumber: row.caller_number ?? undefined,
@@ -133,14 +137,16 @@ export class MysqlRuntimeStore implements RuntimeStore {
   async createCallSession(session: NewCallSession): Promise<{ session: CallSessionRecord; created: boolean }> {
     try {
       await this.pool.execute(
-        `INSERT INTO call_session (id, asterisk_linked_id, officepulse_instance_id, tenant_id, did_e164,
+        `INSERT INTO call_session (id, asterisk_linked_id, officepulse_instance_id, pbx_context, ingress_context, tenant_id, did_e164,
            caller_number, config_did_route_id, config_did_route_rev, config_profile_id, config_profile_rev,
            config_tenant_rev, room_name, destination_type, destination_id, disposition, state)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           session.id,
           session.asteriskLinkedId,
           session.officePulseInstanceId,
+          session.pbxContext ?? null,
+          session.ingressContext ?? null,
           session.tenantId,
           session.didE164,
           session.callerNumber ?? null,

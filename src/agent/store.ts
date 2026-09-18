@@ -6,6 +6,8 @@ import { CredentialRejected, profileSnapshot, sameHash } from './contract.js';
 
 export interface Admission {
   callId: string; tenantId: string; roomName: string; instanceId: string; linkedId: string;
+  /** Routing scope pinned at admission; ingressContext lets ownership be re-derived from the DID's own rows. */
+  pbxInstanceId: string; context: string; ingressContext: string;
   bootstrapHash: string; routeHash: string; profile: ProfileSnapshot; expiresAt: number;
   dispatchId?: string; agentIdentity?: string; agentSid?: string; sipIdentity?: string; sipSid?: string;
   status: 'pending' | 'dispatched' | 'admitted' | 'ready' | 'fallback' | 'ended';
@@ -53,9 +55,14 @@ export class MysqlAdmissionStore implements AdmissionStore {
       if (!a || !c || a.status !== 'dispatched' || a.expiresAt <= Number(rows[0]!.now_ms) || c.ended_at || c.disposition !== 'SCREEN' ||
         ['ended','failed','fallback','human-active'].includes(c.state) || a.dispatchId !== expected.dispatchId ||
         !sameHash(a.bootstrapHash, b.bootstrapHash) || !sameHash(a.routeHash, b.routeHash) || a.tenantId !== expected.tenantId ||
-        c.tenant_id !== a.tenantId || c.room_name !== a.roomName || c.officepulse_instance_id !== a.instanceId || c.asterisk_linked_id !== a.linkedId) throw new CredentialRejected();
-      const profile = profileSnapshot(a.profile);
-      if (profile.tenantId !== a.tenantId || profile.callSessionId !== a.callId || profile.didE164 !== c.did_e164) throw new CredentialRejected();
+        a.pbxInstanceId !== expected.pbxInstanceId || a.context !== expected.context ||
+        c.tenant_id !== a.tenantId || c.room_name !== a.roomName || c.officepulse_instance_id !== a.instanceId || c.asterisk_linked_id !== a.linkedId ||
+        // Routing scope is pinned three ways: snapshot, admission and call record must all agree (#22).
+        c.officepulse_instance_id !== a.pbxInstanceId || c.pbx_context !== a.context) throw new CredentialRejected();
+      // v2 only: a stored v1 snapshot (or any malformed one) is a rejected credential, never a 400 to the Agent.
+      let profile: ProfileSnapshot; try { profile = profileSnapshot(a.profile); } catch { throw new CredentialRejected(); }
+      if (profile.tenantId !== a.tenantId || profile.callSessionId !== a.callId || profile.didE164 !== c.did_e164 ||
+        profile.pbxInstanceId !== a.pbxInstanceId || profile.context !== a.context) throw new CredentialRejected();
       await conn.execute("UPDATE agent_admission SET status='admitted',sip_identity=?,sip_sid=?,agent_identity=?,agent_sid=? WHERE call_id=?",
         [b.sipIdentity, b.sipSid, b.agentIdentity, b.agentSid, a.callId]);
       await conn.execute("UPDATE call_session SET state='admitted',agent_participant_sid=?,version=version+1 WHERE id=?", [b.agentSid, a.callId]);

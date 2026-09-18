@@ -121,6 +121,21 @@ test('POC provisioning is opt-in and requires its dedicated writer credentials',
   assert.throws(() => loadConfig({ ...PROD_ENV, PBX_PROVISIONING_ENABLED: 'yes' }), /PBX_PROVISIONING_ENABLED/);
 });
 
+test('the retired tenant map fails startup explicitly; the Asterisk context is the PBX scope', () => {
+  assert.throws(() => loadConfig({ ...PROD_ENV, PBX_INVENTORY_TENANTS_JSON: '{"1":{"contexts":["one"],"queueNames":[]}}' }),
+    (error: ConfigError) => error.problems.includes('PBX_INVENTORY_TENANTS_JSON is retired: PBX scope is the Asterisk context. See docs/PBX_SOURCE_OF_TRUTH.md (Migrating from tenant maps)'));
+  assert.throws(() => loadConfig({ NODE_ENV: 'development', PBX_INVENTORY_TENANTS_JSON: '{}' }), /PBX_INVENTORY_TENANTS_JSON is retired/);
+  const config = loadConfig({ ...PROD_ENV, PBX_INVENTORY_TENANTS_JSON: '  ' });
+  assert.equal('pbxInventoryScopes' in config, false);
+});
+
+test('OFFICEPULSE_INSTANCE_ID is the PBX instance wire name and must fit its grammar', () => {
+  assert.equal(loadConfig({ NODE_ENV: 'development' }).officePulseInstanceId, 'officepulse-dev');
+  assert.equal(loadConfig({ ...PROD_ENV, OFFICEPULSE_INSTANCE_ID: 'pbx.site-1_A' }).officePulseInstanceId, 'pbx.site-1_A');
+  for (const id of ['bad id', 'x'.repeat(81), 'op/1', 'op:1']) assert.throws(() => loadConfig({ ...PROD_ENV, OFFICEPULSE_INSTANCE_ID: id }), /OFFICEPULSE_INSTANCE_ID must match/, id);
+  assert.throws(() => loadConfig({ ...PROD_ENV, OFFICEPULSE_INSTANCE_ID: '' }), /OFFICEPULSE_INSTANCE_ID is required/);
+});
+
 test('PBX writer cannot reuse inventory or runtime account names', () => {
   for (const user of ['aida_runtime', 'inventory_ro']) {
     assert.throws(() => loadConfig({ ...PROD_ENV, PBX_PROVISIONING_ENABLED: 'true',

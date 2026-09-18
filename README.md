@@ -10,7 +10,7 @@ There is no copied extension/queue desired state, provisioning synchronization,
 retry ledger, ring-group adapter or rollback switch. The optional writer changes
 Asterisk Realtime directly; the NocoDB routing graph remains removed. Reusable ARI, LiveKit, FastAGI, takeover and
 device modules and their tests remain. With voice enabled, ARI reconciliation,
-signed LiveKit callbacks and FastAGI still run. Agent bootstrap v1 and native
+signed LiveKit callbacks and FastAGI still run. Agent bootstrap v2 and native
 queue admission are available through explicit opt-in configuration; disabled
 admission preserves PBX fallback. TAKEOVER returns 503 before recording a command
 until its separate native destination resolver is supplied. DRAIN_ACK remains supported. Canonical device admission is unwired until
@@ -20,8 +20,8 @@ native PBX authorization is defined. AidaHandset/AidaAgent work is deferred.
 
 | Listener | Routes | Access |
 | --- | --- | --- |
-| Private `HTTP_PORT=8085` | `/v1/admin/pbx/extensions?iTenantId=N`, `/v1/admin/pbx/queues?iTenantId=N` | CIDR-admitted Admin server; explicit operator tenant scope |
-| Private `HTTP_PORT=8085` | extension, queue, queue-member and DID mutations under `/v1/admin/pbx` | Explicit opt-in writer; same tenant and Admin controls |
+| Private `HTTP_PORT=8085` | `/v1/admin/pbx/contexts`, `/v1/admin/pbx/extensions?context=X`, `/v1/admin/pbx/queues?context=X` | CIDR-admitted Admin server; scope is one Asterisk context on this PBX instance |
+| Private `HTTP_PORT=8085` | extension, queue, queue-member and DID mutations under `/v1/admin/pbx` | Explicit opt-in writer; same context scope and Admin controls (DID routes add `didContext`) |
 | Private `HTTP_PORT=8085` | `/v1/admin/calls/:id`, `/v1/admin/calls/:id/events` | Read-only observed integration call history |
 | Private `HTTP_PORT=8085` | POST `/v1/admin/calls/:id/commands` | DRAIN_ACK with voice enabled; TAKEOVER unavailable until native routing exists |
 | Public `PUBLIC_HTTP_PORT=8086` | POST `/v1/agent/calls/:id/bootstrap` | One-time call credentials; explicit native admission opt-in |
@@ -30,7 +30,9 @@ native PBX authorization is defined. AidaHandset/AidaAgent work is deferred.
 Legacy `/v1/provisioning` and canonical device paths remain absent. The smaller
 PBX writer exists only under `/v1/admin/pbx` when explicitly enabled.
 The private API is not browser authentication: AidaAdmin must authenticate its
-staff actor and authorize the requested tenant/call before forwarding a request.
+staff actor, authorize the requested tenant, resolve that tenant's Asterisk
+contexts, and authorize the call before forwarding a request. A context name
+selects the routing scope `{pbxInstanceId, context}`; it is never authorization by itself.
 
 Read the [PBX inventory contract](docs/PBX_SOURCE_OF_TRUTH.md),
 [runtime contract](docs/PLATFORM_API.md) and
@@ -42,7 +44,8 @@ Read the [PBX inventory contract](docs/PBX_SOURCE_OF_TRUTH.md),
 Nonblank environment overrides take precedence over `officepulse`, `aida`, then
 `*` scopes. Restart after changing settings. OfficePulse no longer reads
 AidaAdmin's retired extension, ring-group, DID or device tables. Opt-in native
-admission reads only the selected enabled assistant profile for a pinned call snapshot.
+admission reads the persisted per-context/DID profile assignments
+(`aida_tbl_ProfileAssignment`, managed through AidaAdmin) for a pinned call snapshot.
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
@@ -55,23 +58,26 @@ admission reads only the selected enabled assistant profile for a pinned call sn
 | `PBX_INVENTORY_ENABLED` | false | Enable private vendor configuration reads |
 | `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE` | Explicit production values / port 3306 | External OfficePulse vendor database coordinates |
 | `PBX_INVENTORY_MYSQL_USER`, `PBX_INVENTORY_MYSQL_PASSWORD` | Required when inventory enabled | Dedicated SELECT-only account |
-| `PBX_INVENTORY_TENANTS_JSON` | no mappings | Reviewed tenant contexts, queues and managed-DID ingress context; legacy `didNumbers` values are ignored by DID authorization |
+| `OFFICEPULSE_INSTANCE_ID` | `officepulse-dev` outside production | PBX instance wire name `pbxInstanceId` (`^[A-Za-z0-9_.-]{1,80}$`); with an Asterisk context it forms the routing scope |
+| `PBX_INVENTORY_TENANTS_JSON` | retired | Startup fails when set: PBX scope is the Asterisk context. See `docs/PBX_SOURCE_OF_TRUTH.md` (Migrating from tenant maps) |
 | `PBX_PROVISIONING_ENABLED` | false | Register the POC PBX mutation routes |
 | `PBX_PROVISIONING_MYSQL_USER`, `PBX_PROVISIONING_MYSQL_PASSWORD` | required when enabled | Dedicated Realtime writer account |
 | `NATIVE_ADMISSION_ENABLED` | false | Opt in to native Agent bootstrap; see `docs/AGENT_BOOTSTRAP.md` |
-| `AGENT_PROFILE_IDS_JSON` | no selection | Pins one assistant profile per tenant when several are enabled |
+| `AGENT_PROFILE_IDS_JSON` | retired | Startup fails when set: profiles are assigned per context/DID in `aida_tbl_ProfileAssignment` through AidaAdmin. See `docs/AGENT_BOOTSTRAP.md` |
 | `AGENT_CONFIG_REFRESH_SECONDS` | 300 (range 30–3600) | Background refresh of the cached profiles; never a call-path timeout |
 | `AGENT_IDENTITY_TENANT_CHECK` | false | Consult Identity's runtime tenant check during refresh only, never during a call |
 
 `VOICE_ENABLED=false` is the canonical development setting. With voice enabled,
 `ARI_URL`, `ARI_USERNAME`, `ARI_PASSWORD`, `LIVEKIT_URL`, `LIVEKIT_API_KEY`,
 `LIVEKIT_API_SECRET` and `LIVEKIT_SIP_HOST` remain required in production;
-`OFFICEPULSE_INSTANCE_ID` identifies this service. `FASTAGI_PORT` defaults to 4573,
+`OFFICEPULSE_INSTANCE_ID` names this PBX instance (`pbxInstanceId` in `/readyz`, inventory
+responses, dispatch metadata and profile snapshots). `FASTAGI_PORT` defaults to 4573,
 `FASTAGI_BIND` to 0.0.0.0. Existing takeover timing/MOH and optional Pusher settings
 remain supported. PBX writer credentials are required only when its opt-in flag
 is enabled; Device admission remains separate. Native Agent admission uses the opt-in
-settings in the bootstrap runbook; it loads assistant profiles at startup and refreshes
-them in the background, so admission and active calls issue no Identity or NocoDB request.
+settings in the bootstrap runbook; it loads the per-context/DID profile assignments at
+startup and refreshes them in the background, so admission and active calls issue no
+Identity or NocoDB request.
 
 Readiness reports runtime MySQL and NocoDB as critical, and PBX inventory as a
 separate degraded component when not configured/unavailable. ARI is critical
@@ -96,12 +102,12 @@ reviewed deployments; this change does not execute them or modify the PBX host.
 
 The operations UI is served at `https://officepulse-admin.localsplash.dev/`.
 Sign in with central Identity using a platform Super Admin account. It reads native
-extensions and queues, service readiness, live ARI endpoints/channels, and tenant
+extensions and queues of a selected Asterisk context, service readiness, live ARI endpoints/channels, and tenant
 integration call diagnostics. Every data request rechecks the central session.
 Its authenticated API
 console at `/ops/docs` can invoke explicitly browser-enabled Admin routes, including
 call commands and enabled PBX provisioning. Mutations require a same-origin request and CSRF token; each route
-must declare how its tenant scope is authorized before the gateway exposes it.
+must declare its authorization scope (context grammar, platform, or tenant-based call session) before the gateway exposes it.
 
 Public, non-interactive Swagger remains at `https://officepulse-api.localsplash.dev/docs`.
 The Super Admin console is at `https://officepulse-admin.localsplash.dev/ops/docs`.
@@ -121,7 +127,8 @@ See [POC PBX provisioning](docs/PBX_PROVISIONING.md) for mutation contracts,
 DID hours/ring/AI behavior, Identity authorization, installed-schema limits, table-backed
 Realtime routing requirements, and apply-state limits.
 
-`TEST_PBX_PROVISIONING_MYSQL_URL` validates writer grants and transactional tenant isolation on a disposable `aida_pbx_provisioning_*_test` database. `TEST_ASTERISK_BINARY` exercises the shared DID include in an isolated process without SIP/network modules. Neither test mutates the live PBX.
+`TEST_PBX_PROVISIONING_MYSQL_URL` validates writer grants and transactional context isolation on a disposable `aida_pbx_provisioning_*_test` database. `TEST_ASTERISK_BINARY` exercises the shared DID include in an isolated process without SIP/network modules. Neither test mutates the live PBX.
 
-See [Agent bootstrap v1](docs/AGENT_BOOTSTRAP.md) for issue #18 implementation,
-credential/profile contracts, native ingress and SIP prerequisites, and live-call acceptance.
+See [Agent bootstrap v2](docs/AGENT_BOOTSTRAP.md) for the #18/#19/#22/#23 implementation,
+credential/profile contracts, context-scoped admission, native ingress and SIP prerequisites,
+and live-call acceptance.

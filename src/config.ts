@@ -1,6 +1,5 @@
 import { ConfigError } from './errors.js';
 import { parseCidr } from './net/cidr.js';
-import { parsePbxTenantScopes, type PbxTenantScopes } from './pbx/inventory.js';
 import type { RuntimeMysqlConfig } from './runtime/mysqlRuntimeStore.js';
 
 export type RuntimeEnv = 'production' | 'development' | 'test';
@@ -9,7 +8,6 @@ export interface AppConfig {
   env: RuntimeEnv;
   /** Explicit administration-only mode; calling requires configured voice connectors. */
   voiceEnabled: boolean;
-  pbxInventoryScopes: PbxTenantScopes;
   pbxInventoryMysql?: RuntimeMysqlConfig;
   /** Dedicated least-privilege writer for explicitly enabled POC provisioning. */
   pbxProvisioningMysql?: RuntimeMysqlConfig;
@@ -150,8 +148,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   if (env.PBX_PROVISIONING_ENABLED !== undefined && !['true', 'false'].includes(env.PBX_PROVISIONING_ENABLED)) {
     problems.push('PBX_PROVISIONING_ENABLED must be true or false');
   }
+  // The retired tenant map fails startup explicitly (#23): PBX scope is the Asterisk context, never a copied map.
+  if (env.PBX_INVENTORY_TENANTS_JSON?.trim()) {
+    problems.push('PBX_INVENTORY_TENANTS_JSON is retired: PBX scope is the Asterisk context. See docs/PBX_SOURCE_OF_TRUTH.md (Migrating from tenant maps)');
+  }
   /** In production a value must be supplied; elsewhere a dev default stands in. */
   const required = (devFallback: string): string | undefined => (isProd ? undefined : devFallback);
+  // Wire name `pbxInstanceId`: with the context it forms the routing scope of every call and PBX object (#22).
+  const officePulseInstanceId = str(env, 'OFFICEPULSE_INSTANCE_ID', problems, required('officepulse-dev'));
+  if (officePulseInstanceId && !/^[A-Za-z0-9_.-]{1,80}$/.test(officePulseInstanceId)) {
+    problems.push('OFFICEPULSE_INSTANCE_ID must match ^[A-Za-z0-9_.-]{1,80}$');
+  }
 
   const logLevel = (env.LOG_LEVEL as AppConfig['logLevel']) || 'info';
   if (!['debug', 'info', 'warn', 'error'].includes(logLevel)) {
@@ -172,7 +179,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const config: AppConfig = {
     env: runtimeEnv,
     voiceEnabled,
-    pbxInventoryScopes: parsePbxTenantScopes(env.PBX_INVENTORY_TENANTS_JSON),
     pbxInventoryMysql: env.PBX_INVENTORY_ENABLED === 'true' ? {
       host: str(env, 'MYSQL_HOST', problems, required('127.0.0.1')),
       port: int(env, 'MYSQL_PORT', 3306, problems, 1, 65535),
@@ -188,7 +194,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       password: str(env, 'PBX_PROVISIONING_MYSQL_PASSWORD', problems),
     } : undefined,
     logLevel,
-    officePulseInstanceId: str(env, 'OFFICEPULSE_INSTANCE_ID', problems, required('officepulse-dev')),
+    officePulseInstanceId,
     fastAgi: {
       port: int(env, 'FASTAGI_PORT', 4573, problems, 1, 65535),
       bind: env.FASTAGI_BIND ?? '0.0.0.0',

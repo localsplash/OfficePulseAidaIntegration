@@ -23,7 +23,7 @@ import { LiveKitClient } from './livekit/client.js';
 import { LiveKitWebhookHandler } from './livekit/webhookHandler.js';
 import { PusherNotifier } from './notify/pusher.js';
 import { RuntimeCallEventSink } from './runtime/callEventSink.js';
-import { mysqlPbxInventory, pbxInventoryRoutes } from './pbx/inventory.js';
+import { mysqlPbxInventory, pbxInventoryRoutes, type InventoryReader } from './pbx/inventory.js';
 import { MysqlPbxProvisioner, pbxProvisioningRoutes } from './pbx/provisioning.js';
 import { MysqlRuntimeStore } from './runtime/mysqlRuntimeStore.js';
 import { NocoDbReadClient } from './nocodb/api.js';
@@ -41,7 +41,7 @@ async function main(): Promise<void> {
   await migrateRuntime(config.runtimeMysql);
   const logger = new Logger({ level: config.logLevel });
   const runtime = new MysqlRuntimeStore(config.runtimeMysql);
-  const inventory = config.pbxInventoryMysql ? mysqlPbxInventory(config.pbxInventoryMysql, true) : undefined;
+  const inventory = config.pbxInventoryMysql ? mysqlPbxInventory(config.pbxInventoryMysql) : undefined;
   const provisioner = config.pbxProvisioningMysql ? new MysqlPbxProvisioner(config.pbxProvisioningMysql) : undefined;
   const noco = new NocoDbReadClient(config.nocodb);
   const readiness = new Readiness();
@@ -62,13 +62,13 @@ async function main(): Promise<void> {
   const admissions = agent ? new MysqlAdmissionStore(config.runtimeMysql) : undefined;
   // Business configuration is loaded here, once, and refreshed on its own timer.
   // Admission, credential consumption and monitoring only read the cache (#19).
-  const profiles = agent ? new AgentConfigCache({ tenantIds: [...config.pbxInventoryScopes.keys()],
-    source: nocoProfileSource(noco, agent.profileIds), refreshMs: agent.configRefreshMs,
+  // Assignments come from PlatformConfig aida_tbl_ProfileAssignment for this instance (#23), never an environment map.
+  const profiles = agent ? new AgentConfigCache({ source: nocoProfileSource(noco, config.officePulseInstanceId), refreshMs: agent.configRefreshMs,
     logger: logger.child({ component: 'agent-config' }),
     ...(agent.identityTenantCheck ? { tenantEnabled: identityTenantEnabled(agent.identityOrigin,
       { clientSecret: agent.identitySecret, logger: logger.child({ component: 'identity' }) }) } : {}) }) : undefined;
   if (agent) readiness.register('agent-config-cache', 'degraded', false, 'Agent business configuration has not been loaded');
-  const native = agent && profiles ? mysqlNativeAuthority(config.pbxInventoryMysql!, { scopes: config.pbxInventoryScopes, profiles }) : undefined;
+  const native = agent && profiles ? mysqlNativeAuthority(config.pbxInventoryMysql!, { pbxInstanceId: config.officePulseInstanceId, profiles }) : undefined;
   const authority = agent && admissions && native ? new BootstrapAuthority({ store: admissions, runtime,
     native: native.authority, livekit, routeAttribute: agent.routeAttribute, instanceId: config.officePulseInstanceId }) : undefined;
   let monitor: AgentMonitor | undefined;
@@ -99,12 +99,13 @@ async function main(): Promise<void> {
     logger: logger.child({ component: 'admission' }),
   }) : nativePbxFallback;
   ari.on('connected', () => { void takeover.reconcile().catch((err) => logger.error('reconciliation failed', { err })); });
+  const noInventory: InventoryReader = { contexts: async () => [], extensions: async () => [], queues: async () => [] };
   const routes = assembleApiRoutes(
     [
       ...(authority ? [authority.route(config.voiceEnabled)] : [{ method: 'POST', pattern: '/v1/agent/calls/:callSessionId/bootstrap', trusted: false, rawBody: true,
         handler: () => ({ status: 503, body: { error: 'authority_unavailable' } }) }]),
-      ...pbxInventoryRoutes(inventory?.reader ?? { extensions: async () => [], queues: async () => [] }, config.pbxInventoryScopes, !!inventory, !!provisioner),
-      ...pbxProvisioningRoutes(provisioner, config.pbxInventoryScopes, !!provisioner),
+      ...pbxInventoryRoutes(inventory?.reader ?? noInventory, !!inventory, config.officePulseInstanceId, !!provisioner),
+      ...pbxProvisioningRoutes(provisioner, !!provisioner, config.officePulseInstanceId),
     ],
     voiceAvailability(buildRoutes({ runtime, takeover,
       defaultRingTimeoutSeconds: config.takeover.ringTimeoutSeconds,
@@ -114,7 +115,7 @@ async function main(): Promise<void> {
   const fastAgi = new FastAgiServer({ ...config.fastAgi, logger,
     handlers: { bootstrap: createBootstrapHandler({ orchestrator,
       officePulseInstanceId: config.officePulseInstanceId, logger }) } });
-  const options = { logger, readiness, trustedServerCidrs: config.http.trustedServerCidrs, trustedProxyCidrs: config.http.trustedProxyCidrs,
+  const options = { logger, readiness, pbxInstanceId: config.officePulseInstanceId, trustedServerCidrs: config.http.trustedServerCidrs, trustedProxyCidrs: config.http.trustedProxyCidrs,
     maxBodyBytes: config.http.maxBodyBytes, rateLimitPerMinute: config.http.rateLimitPerMinute, routes };
   const privateApi = new HttpApi(options);
   // Public routes authenticate with a webhook signature or one-time Agent credentials.
@@ -131,7 +132,7 @@ async function main(): Promise<void> {
   const operations = opsConfig ? new OperationsServer(opsConfig, {
     identity: new HttpOperationsIdentity(opsConfig.identityUrl, opsConfig.identitySecret),
     readiness, live: new AriDiagnostics(opsConfig.ari), inventory: inventory?.reader,
-    scopes: config.pbxInventoryScopes, runtime, adminRoutes: routes,
+    pbxInstanceId: config.officePulseInstanceId, runtime, adminRoutes: routes,
   }) : undefined;
   if (operations && opsConfig) await operations.listen(opsConfig.port, config.http.bind);
   if (config.voiceEnabled) { ari.start(); await fastAgi.listen(); }
@@ -146,14 +147,9 @@ async function main(): Promise<void> {
     readiness.set('nocodb', nocoReady);
 
     if (inventory) {
-      try {
-        if (!config.pbxInventoryScopes.size) throw new Error('No mapped tenants');
-        for (const scope of config.pbxInventoryScopes.values()) {
-          await inventory.reader.extensions(scope);
-          await inventory.reader.queues(scope);
-        }
-        readiness.set('pbx-inventory', true);
-      } catch { readiness.set('pbx-inventory', false, 'PBX inventory unavailable; verify connection, schema, grants and tenant scope'); }
+      // Listing contexts touches both native tables the context-scoped reads depend on.
+      try { await inventory.reader.contexts(); readiness.set('pbx-inventory', true); }
+      catch { readiness.set('pbx-inventory', false, 'PBX inventory unavailable; verify connection, schema and grants'); }
     }
     if (provisioner) {
       const connected = await provisioner.ping();
@@ -163,18 +159,18 @@ async function main(): Promise<void> {
       const status = profiles.status();
       // Keep the detail stable across refreshes so readiness observers record transitions, not heartbeats.
       readiness.set('agent-config-cache', status.complete, status.complete
-        ? `Cached assistant configuration for ${status.loadedTenants.length} mapped tenant(s); calls do not read PlatformConfig or Identity`
-        : `Cached ${status.loadedTenants.length}/${status.configuredTenants} tenant(s); calls for uncached tenants fall back to the PBX queue`);
+        ? `Cached assistant configuration for ${status.loadedKeys.length} enabled profile assignment(s); calls do not read PlatformConfig or Identity`
+        : `Cached ${status.loadedKeys.length}/${status.configuredAssignments} enabled profile assignment(s); calls for unassigned or uncached scopes fall back to the PBX queue`);
     }
     const components = readiness.snapshot().components;
-    // NocoDB/Identity availability no longer gates admission: the cache does.
-    readiness.set('native-pbx-admission', !!agent && config.pbxInventoryScopes.size > 0 && ['runtime-mysql','ari','livekit','pbx-inventory','agent-config-cache'].every(key => components[key]?.ready === true),
+    // NocoDB/Identity availability no longer gates admission: the cache does, once it holds at least one assignment.
+    readiness.set('native-pbx-admission', !!agent && (profiles?.status().loadedKeys.length ?? 0) > 0 && ['runtime-mysql','ari','livekit','pbx-inventory','agent-config-cache'].every(key => components[key]?.ready === true),
       agent ? 'Admission implementation configured; real-call acceptance is separate' : 'Native agent admission is disabled');
   };
   await probe();
   const timer = setInterval(() => { void probe(); }, 30000);
   timer.unref();
-  logger.info('PBX inventory and diagnostic API listening', { privatePort: config.http.port, healthPort: config.http.publicPort });
+  logger.info('PBX inventory and diagnostic API listening', { privatePort: config.http.port, healthPort: config.http.publicPort, pbxInstanceId: config.officePulseInstanceId });
   let closing = false;
   const shutdown = () => {
     if (closing) return;

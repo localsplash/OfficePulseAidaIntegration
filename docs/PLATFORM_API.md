@@ -11,7 +11,9 @@ sync status or ring-group provisioning contract.
 `aidacalls_db` contains observed integration call sessions/events, command
 history, participant/webhook observations, event receipts and dependency status.
 Its rows are diagnostics, not a copy of current PBX configuration or native
-Asterisk CDR. Existing observed destination labels/IDs may remain in historical
+Asterisk CDR. A call session pins its routing scope (`officepulse_instance_id`,
+`pbx_context`) and the carrier `ingress_context` it arrived in; `tenant_id` is
+customer identity for authorization and observation, never a routing key. Existing observed destination labels/IDs may remain in historical
 call rows. Canonical TAKEOVER cannot resolve these IDs as native routing intent.
 
 The old `provisioning_operation` and `did_fallback` tables and accessors are
@@ -23,8 +25,9 @@ packaged or applied.
 
 ## HTTP
 
-- Private GET `/v1/admin/pbx/extensions?iTenantId=N` and `/v1/admin/pbx/queues?iTenantId=N`
-  follow the [inventory contract](PBX_SOURCE_OF_TRUTH.md).
+- Private GET `/v1/admin/pbx/contexts`, `/v1/admin/pbx/extensions?context=X` and
+  `/v1/admin/pbx/queues?context=X` follow the [inventory contract](PBX_SOURCE_OF_TRUTH.md);
+  the retired `iTenantId` parameter is refused.
 - Opt-in extension, queue, queue-member and DID mutations under `/v1/admin/pbx`
   follow the [POC provisioning contract](PBX_PROVISIONING.md).
 - Private GET `/v1/admin/calls/:callSessionId` returns the observed session or 404.
@@ -37,7 +40,8 @@ packaged or applied.
 - POST `/v1/integrations/livekit/webhooks` verifies LiveKit's signature over the
   raw body and retains durable event handling. Agent bootstrap is separately
   authenticated by one-time call credentials.
-- `/healthz` and `/readyz` are available on both listeners.
+- `/healthz` and `/readyz` are available on both listeners; `/readyz` carries
+  `pbxInstanceId` so a client can pin the routing scope it administers.
 
 Legacy `/v1/provisioning` routes are removed, and canonical device admission is not registered.
 With `VOICE_ENABLED=false`, all voice mutations/callbacks return 503 `voice_unavailable`
@@ -45,13 +49,14 @@ and connectors stay stopped. With voice enabled, ARI reconciliation, LiveKit
 callbacks and FastAGI run. Without native admission enabled, FastAGI `/bootstrap`
 returns FALLBACK without overwriting PBX-owned fallback variables or reading
 deleted projections. Explicit native admission opt-in wires the verified
-bootstrap v1 orchestrator described in AGENT_BOOTSTRAP.md.
+bootstrap v2 orchestrator described in AGENT_BOOTSTRAP.md.
 Device, ARI, takeover, protocol/event libraries and their tests remain reusable.
 
 The private listener is CIDR-admitted and never published through the browser
 proxy. AidaAdmin authenticates staff and checks tenant/call access. A query ID,
 forwarded header, MAC, phone number or recording filename is not authorization.
-SQL read grants, scope mapping and HTTP trust are separate requirements.
+SQL read grants, context ownership derived from Asterisk's own rows, and HTTP
+trust are separate requirements.
 
 ## Remaining work
 
@@ -60,7 +65,7 @@ PBX acceptance are tracked
 in issues #2/#7 and AidaAdmin #29. AidaAgent and AidaHandset implementation remains
 deferred. There is no separate AidaOfficePbxAdmin or AidaControl application.
 
-## Agent bootstrap v1
+## Agent bootstrap v2
 
 `POST /v1/agent/calls/{callSessionId}/bootstrap` uses one-time call credentials
 on the public listener. It is unavailable until native admission is enabled.

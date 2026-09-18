@@ -97,6 +97,8 @@ test('installation contract maps six native Realtime families and keeps DID rout
   const runbook = await readFile(new URL('../docs/PBX_PROVISIONING.md', import.meta.url), 'utf8');
   for (const requirement of ['include it once', 'generic Realtime switch', '+19496501147', 'queue show concierge', 'pjsip show endpoint livekit', 'recording', 'Rollback'.toLowerCase()]) assert.ok(runbook.includes(requirement), requirement);
   assert.ok(runbook.includes('DID-specific static route'));
-  assert.ok(runbook.includes('"didContext":"from-bandwidth"'));
+  // The ingress context is assigned in AidaAdmin and legacy queues are adopted by marker, never through a tenant map.
+  assert.ok(runbook.includes('DID ingress context to `from-bandwidth`')); assert.ok(runbook.includes('npm run pbx:adopt-queue -- <context> <queue>'));
+  assert.doesNotMatch(runbook, /PBX_INVENTORY_TENANTS_JSON` with|Save the reviewed map/);
   assert.ok(runbook.includes('sole source'));
 });

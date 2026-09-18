@@ -23,11 +23,15 @@ Super Admins may enter. No local password or separate user database is created.
 
 The authenticated interactive API console is at `OPS_PUBLIC_URL` + `/ops/docs`.
 Browser requests use the same-origin `/ops/api/v1/admin/*` gateway, which revalidates
-Identity, restricts the request to an enabled tenant, and requires Origin plus CSRF
-proof for every non-read method. The gateway supports GET, POST, PUT, PATCH and
+Identity, validates the requested Asterisk `context` grammar for inventory and
+provisioning routes, restricts call lookups to an enabled tenant, and requires
+Origin plus CSRF proof for every non-read method. The gateway supports GET, POST, PUT, PATCH and
 DELETE, but a new private route is not exposed merely by existing: its `Route`
-must opt in with `operationsAccess` and declare either tenant-query or call-session
-authorization. This prevents future internal maintenance endpoints from silently
+must opt in with `operationsAccess` and declare context-query, platform, or
+call-session authorization. The UI toolbar selects one context from
+`/ops/api/contexts` (which also reports `pbxInstanceId`) and reads
+`/ops/api/contexts/:context/extensions|queues`; `/ops/api/tenants/:id/calls/:callId`
+stays tenant-authorized because a call belongs to a customer. This prevents future internal maintenance endpoints from silently
 becoming browser-accessible.
 
 Optional live diagnostics use `OPS_ARI_URL=http://127.0.0.1:8088/ari`,
@@ -54,7 +58,7 @@ scope, with value `https://officepulse-api.localsplash.dev`. It is not a browser
 setting and must not include an internal port. Remove stale environment overrides.
 
 Validate public TLS, anonymous data rejection, central login and revocation,
-tenant mappings, native queue member counts and Swagger assets after restarting
+the context listing, native queue member counts and Swagger assets after restarting
 the integration and reloading nginx. A successful diagnostics deployment does not
 prove live call takeover, carrier registration, native CDR coverage or maintenance
 operations; those capabilities remain separate work.

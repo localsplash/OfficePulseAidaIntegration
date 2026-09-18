@@ -22,13 +22,15 @@ export class NativeCallOrchestrator implements BootstrapDecider {
       if (!this.opts.available() || r.officePulseInstanceId !== this.opts.instanceId || !/^[A-Za-z0-9_.-]{1,80}$/.test(r.asteriskLinkedId)) throw new Error('unavailable');
       stage = 'resolve';
       const candidate = randomUUID();
-      const native = await this.opts.native.resolve({ didE164: r.didE164, ingressContext: r.ingressContext ?? '', fallbackQueue: r.fallbackQueue ?? '' }, candidate);
+      const ingressContext = r.ingressContext ?? '';
+      const native = await this.opts.native.resolve({ didE164: r.didE164, ingressContext, fallbackQueue: r.fallbackQueue ?? '' }, candidate);
       withinSetup();
-      if (!native) throw new Error('unauthorized');
+      if (!native || native.pbxInstanceId !== this.opts.instanceId) throw new Error('unauthorized');
       stage = 'create-session';
       const roomName = `aida-${candidate}`;
+      // The call pins its routing scope {instance, context} and the ingress context; tenantId is customer identity only.
       const result = await this.opts.runtime.createCallSession({ id: candidate, asteriskLinkedId: r.asteriskLinkedId,
-        officePulseInstanceId: r.officePulseInstanceId, tenantId: native.tenantId, didE164: r.didE164, callerNumber: r.callerNumber,
+        officePulseInstanceId: r.officePulseInstanceId, pbxContext: native.context, ingressContext, tenantId: native.tenantId, didE164: r.didE164, callerNumber: r.callerNumber,
         config: { profileId: native.profileId, profileRevision: native.profileRevision }, roomName,
         destinationType: 'QUEUE', destinationId: native.queue, disposition: 'SCREEN', state: 'arrived' });
       // Retry cannot redispatch or reissue a secret. Invalidate ambiguous earlier admission.
@@ -45,11 +47,12 @@ export class NativeCallOrchestrator implements BootstrapDecider {
       // Sanitized evidence that Asterisk's own context/DID/CID reached bootstrap.
       // CID digits stay in the dedicated call_session column, never in event payloads.
       await this.opts.runtime.appendCallEvent(id, { eventType: 'call-arrived',
-        payload: { ingressContext: r.ingressContext ?? null, queue: native.queue, callerIdPresent: r.callerNumber !== undefined } });
+        payload: { ingressContext, context: native.context, queue: native.queue, callerIdPresent: r.callerNumber !== undefined } });
       stage = 'admission-record';
       const bootstrapToken = credential(); const routeToken = credential();
       const deadline = Date.now() + this.opts.startupTimeoutMs;
       await this.opts.store.create({ callId: id, tenantId: native.tenantId, roomName, instanceId: r.officePulseInstanceId,
+        pbxInstanceId: native.pbxInstanceId, context: native.context, ingressContext,
         linkedId: r.asteriskLinkedId, bootstrapHash: digest(bootstrapToken), routeHash: digest(routeToken), profile: native.profile,
         expiresAt: Date.now() + 120_000, status: 'pending' });
       stage = 'livekit-create-room';
@@ -59,7 +62,7 @@ export class NativeCallOrchestrator implements BootstrapDecider {
       await this.opts.monitor.start(id, deadline);
       withinSetup();
       stage = 'livekit-dispatch';
-      const dispatchId = await this.opts.livekit.dispatchAgent(roomName, { callSessionId: id, bootstrapToken });
+      const dispatchId = await this.opts.livekit.dispatchAgent(roomName, { callSessionId: id, bootstrapToken, pbxInstanceId: native.pbxInstanceId, context: native.context });
       withinSetup();
       stage = 'dispatch-record';
       await this.opts.store.dispatched(id, dispatchId);

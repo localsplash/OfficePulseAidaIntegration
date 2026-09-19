@@ -72,6 +72,8 @@ test('isolated Asterisk exercises schedule, answer, timeout and unavailable/malf
     }
     const log = output.slice(offset);
     assert.doesNotMatch(log, /No application|Function .* not registered|syntax error/i, log);
+    // Hangup inside the fallback context runs its exact 'h', never the queue pattern.
+    assert.doesNotMatch(log, /Queue\(.*"h,/, log);
     if (name === 'invalid' || name === 'badzone') { assert.doesNotMatch(log, /Executing .* (Queue|Dial)\(/); assert.match(log, /Hangup\(.*"21"/); }
     else if (name === 'bootstrap-down') { assert.match(log, /AGI\(/); assert.match(log, /aida-agent-queue-fallback/); assert.match(log, /answered/); assert.doesNotMatch(log, /Dial\(.*PJSIP/); }
     else if (name === 'derived') {

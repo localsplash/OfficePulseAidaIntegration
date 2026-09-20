@@ -31,7 +31,7 @@ mkdir -p "$INSTALL_DIR"
 rsync -a --delete dist "$INSTALL_DIR/"
 rsync -a package.json package-lock.json "$INSTALL_DIR/"
 mkdir -p "$INSTALL_DIR/deploy/sql"
-rsync -a deploy/sql/runtime-schema.sql deploy/sql/002_device_access.sql deploy/sql/003_event_receipts.sql deploy/sql/004_remove_retired_pbx.sql "$INSTALL_DIR/deploy/sql/"
+rsync -a deploy/sql/runtime-schema.sql deploy/sql/002_device_access.sql deploy/sql/003_event_receipts.sql deploy/sql/004_remove_retired_pbx.sql deploy/sql/005_agent_admission.sql deploy/sql/006_call_scope.sql deploy/sql/007_handset_devices.sql "$INSTALL_DIR/deploy/sql/"
 (cd "$INSTALL_DIR" && npm ci --omit=dev)
 
 id aida >/dev/null 2>&1 || useradd --system --home /nonexistent --shell /usr/sbin/nologin aida

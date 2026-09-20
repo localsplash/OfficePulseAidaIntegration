@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { Logger } from '../logging/logger.js';
 import { ConflictError, NotFoundError } from '../errors.js';
 import type { AriApi, AriEvent, ChannelDestroyedEvent, ChannelStateChangeEvent, StasisStartEvent } from '../ari/types.js';
@@ -20,6 +21,7 @@ export interface TakeoverCommand {
   exten: string;
   ringTimeoutSeconds?: number;
   musicOnHoldClass?: string;
+  deviceId?: string;
 }
 
 export interface TakeoverAck {
@@ -261,17 +263,24 @@ export class TakeoverManager {
     if (replay) return replay;
     if (session.activeCommandKey === cmd.idempotencyKey) return { status: 'in-progress' };
     if (session.activeCommandKey !== undefined) {
-      throw new ConflictError(`takeover already in progress for session ${cmd.callSessionId}`);
+      throw new ConflictError('takeover_in_progress');
     }
     if (session.humanAnswered) {
-      throw new ConflictError(`session ${cmd.callSessionId} already taken over`);
+      throw new ConflictError('already_taken');
     }
 
     session.activeCommandKey = cmd.idempotencyKey;
     session.ringingReported = false;
     const log = this.log(session);
+    await this.emitEvent(session, 'takeover-requested', { destinationType: cmd.destinationType, ...(cmd.deviceId ? { deviceId: cmd.deviceId, endpointId: cmd.exten } : {}) });
+    if (!this.sessions.has(cmd.callSessionId) || session.fellBack || session.fallbackInProgress) return { status: 'failed' };
+    // Busy/auto-answer events can precede the REST response. Correlate before dialing.
+    const humanId = randomUUID();
+    session.humanChannelId = humanId;
+    this.channelToSession.set(humanId, cmd.callSessionId);
     try {
       const human = await this.opts.ari.originate({
+        channelId: humanId,
         endpoint: `Local/${cmd.exten}@${cmd.context}`,
         appArgs: `human,${cmd.callSessionId},${cmd.idempotencyKey}`,
         callerId: session.callerNumber,
@@ -280,25 +289,39 @@ export class TakeoverManager {
           [CHANVAR.callSessionId]: cmd.callSessionId,
           [CHANVAR.role]: 'human',
           [CHANVAR.takeoverKey]: cmd.idempotencyKey,
+          ...(cmd.context === 'aida-takeover' ? {
+            __AIDA_TAKEOVER: '1',
+            __AIDA_TAKEOVER_RING_SECONDS: String(cmd.ringTimeoutSeconds ?? this.opts.defaultRingTimeoutSeconds),
+          } : {}),
         },
       });
+      if (!this.sessions.has(cmd.callSessionId) || session.fellBack || session.fallbackInProgress) {
+        await this.safeAri(() => this.opts.ari.hangup(human.id));
+        return { status: 'failed' };
+      }
+      if (session.humanChannelId !== humanId) return session.completedCommands.get(cmd.idempotencyKey) ?? { status: 'failed' };
       session.humanChannelId = human.id;
       this.channelToSession.set(human.id, cmd.callSessionId);
     } catch (err) {
+      this.channelToSession.delete(humanId);
+      if (session.humanChannelId === humanId) session.humanChannelId = undefined;
       session.activeCommandKey = undefined;
       log.error('takeover originate failed', { err });
+      await this.emitEvent(session, 'takeover-failed', { reason: 'failed' });
       throw err;
     }
 
     // Hold treatment while the destination rings; organization-selectable
     // MOH class comes with the command (from ring group / DID route).
     const mohClass = cmd.musicOnHoldClass ?? this.opts.defaultMohClass;
-    await this.safeAri(() => this.opts.ari.startBridgeMoh(session.bridgeId as string, mohClass));
-    session.mohActive = true;
+    if (!session.humanAnswered) {
+      session.mohActive = true;
+      await this.safeAri(() => this.opts.ari.startBridgeMoh(session.bridgeId as string, mohClass));
+      if (session.humanAnswered || !this.sessions.has(cmd.callSessionId)) await this.stopMoh(session);
+    }
 
     log.info('takeover originated', { destinationType: cmd.destinationType });
-    await this.emitEvent(session, 'takeover-requested', { destinationType: cmd.destinationType });
-    return { status: 'ringing' };
+    return { status: session.humanAnswered ? 'answered' : 'ringing' };
   }
 
   /** Human leg answered: bridge immediately, then drain Aida. */
@@ -320,7 +343,19 @@ export class TakeoverManager {
     // Hold treatment stops the moment the human answers so it cannot
     // leak into the bridged conversation.
     await this.stopMoh(session);
-    await this.opts.ari.addToBridge(session.bridgeId, ev.channel.id);
+    try { await this.opts.ari.addToBridge(session.bridgeId, ev.channel.id); }
+    catch {
+      session.humanAnswered = false;
+      session.humanChannelId = undefined;
+      this.channelToSession.delete(ev.channel.id);
+      const failedKey = session.activeCommandKey ?? ev.args[2];
+      if (failedKey) session.completedCommands.set(failedKey, { status: 'failed' });
+      session.activeCommandKey = undefined;
+      await this.safeAri(() => this.opts.ari.hangup(ev.channel.id));
+      await this.emitEvent(session, 'takeover-failed', { reason: 'failed' });
+      log.warn('human bridge failed; keeping aida with caller');
+      return;
+    }
     log.info('human answered and bridged');
 
     const key = session.activeCommandKey ?? ev.args[2];
@@ -422,7 +457,7 @@ export class TakeoverManager {
     const log = this.log(session);
     if (!session.humanAnswered) {
       // Ring failed: busy / rejected / no-answer. Caller stays with Aida.
-      const reason: TakeoverFailureReason = CAUSE_TO_REASON[ev.cause] ?? 'no-answer';
+      const reason: TakeoverFailureReason = CAUSE_TO_REASON[ev.cause] ?? 'failed';
       session.humanChannelId = undefined;
       await this.stopMoh(session);
       const key = session.activeCommandKey;

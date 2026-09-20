@@ -19,6 +19,7 @@ test('MySQL PBX inventory uses only SELECT grants and isolates exact, case-sensi
     await setup.query(`USE \`${database}\``);
     // Disposable fixtures match the selected vendor columns; this is never an application migration.
     await setup.query('CREATE TABLE ps_endpoints (id VARCHAR(80), context VARCHAR(80), callerid VARCHAR(80), transport VARCHAR(80), aors VARCHAR(80))');
+    await setup.query('CREATE TABLE ps_contacts (endpoint VARCHAR(80),uri VARCHAR(511),via_addr VARCHAR(45),user_agent VARCHAR(255),expiration_time BIGINT)');
     await setup.query('CREATE TABLE ps_auths (id VARCHAR(80), password VARCHAR(80))');
     await setup.query('CREATE TABLE extensions (id BIGINT AUTO_INCREMENT PRIMARY KEY, context VARCHAR(40) NOT NULL, exten VARCHAR(40) NOT NULL, priority INT NOT NULL, app VARCHAR(40), appdata VARCHAR(256))');
     await setup.query('CREATE TABLE queues (name VARCHAR(128), strategy VARCHAR(80))');
@@ -38,6 +39,13 @@ test('MySQL PBX inventory uses only SELECT grants and isolates exact, case-sensi
     const readConfig = { ...config, user: 'pbx_inventory_test_ro', password: 'disposable-test-password' };
     inventory = mysqlPbxInventory(readConfig);
     restricted = await mysql.createConnection(readConfig);
+    await assert.rejects(inventory.reader.checkContacts!(), /SELECT grant on asterisk.ps_contacts/);
+    await setup.query(`GRANT SELECT ON \`${database}\`.ps_contacts TO 'pbx_inventory_test_ro'@'%'`);
+    await setup.query("INSERT INTO ps_contacts VALUES ('101-Tenant-A','sip:101@203.0.113.1:5061','192.168.1.10','Phone/MAC-ec74d7c92718',UNIX_TIMESTAMP()+300),('101-Tenant-A','sip:101@203.0.113.1:5061','192.168.1.11','OldPhone',1)");
+    await inventory.reader.checkContacts!();
+    const contacts = await inventory.reader.contacts!();
+    assert.equal(contacts.length, 1); assert.equal(contacts[0]!.context, 'Tenant-A'); assert.equal(contacts[0]!.endpointId, '101-Tenant-A');
+
     assert.deepEqual(await inventory.reader.contexts(), ['Tenant-A', 'Tenant-B', 'from-carrier', 'tenant-a']);
     assert.deepEqual(await inventory.reader.extensions('Tenant-A'), [{ id: '101-Tenant-A', extension: '101', context: 'Tenant-A', callerId: 'Alice', transport: null, aors: '101-Tenant-A', managed: true }]);
     assert.deepEqual(await inventory.reader.extensions('Tenant-B'), [{ id: '301-t3', extension: '301', context: 'Tenant-B', callerId: 'Bob', transport: null, aors: '301-t3', managed: false }]);

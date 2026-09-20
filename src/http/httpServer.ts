@@ -63,6 +63,7 @@ export interface HttpApiOptions {
   documentation?: boolean;
   /** Reported by /readyz so a client can pin the routing scope {pbxInstanceId, context} it administers. */
   pbxInstanceId?: string;
+  environmentName?: string;
   logger: Logger;
   readiness: Readiness;
   trustedServerCidrs: readonly string[];
@@ -187,12 +188,12 @@ export class HttpApi {
     try {
       if (this.opts.documentation && method === 'GET' && await serveDocumentation(path, res)) return;
       if (path === '/healthz') {
-        this.send(res, 200, { status: 'ok', ...buildInfo }, correlationId);
+        this.send(res, 200, { status: 'ok', ...buildInfo, pbxInstanceId: this.opts.pbxInstanceId, environmentName: this.opts.environmentName }, correlationId);
         return;
       }
       if (path === '/readyz') {
         const snapshot = this.opts.readiness.snapshot();
-        this.send(res, snapshot.ready ? 200 : 503, { ...(this.opts.pbxInstanceId ? { pbxInstanceId: this.opts.pbxInstanceId } : {}), ...snapshot }, correlationId);
+        this.send(res, snapshot.ready ? 200 : 503, { pbxInstanceId: this.opts.pbxInstanceId, environmentName: this.opts.environmentName, ...snapshot }, correlationId);
         return;
       }
 

@@ -17,12 +17,17 @@ export interface PbxQueue {
   id: string; name: string; strategy: string | null;
   members: { interface: string; memberName: string | null; penalty: number; paused: boolean }[];
 }
+export interface PbxContact {
+  endpointId: string; context: string; uri: string; localIp: string; userAgent: string; expiresAt: number;
+}
 
 /** Routing scope is {pbxInstanceId, context}: every read names one Asterisk context and derives ownership from Asterisk's own rows. */
 export interface InventoryReader {
   contexts(): Promise<string[]>;
   extensions(context: string): Promise<PbxExtension[]>;
   queues(context: string): Promise<PbxQueue[]>;
+  contacts?(): Promise<PbxContact[]>;
+  checkContacts?(): Promise<void>;
 }
 export type InventoryQuery = (sql: string, values: string[]) => Promise<Record<string, unknown>[]>;
 const MAX_ROWS = 1000;
@@ -39,6 +44,14 @@ export const dialedEndpoint = (appdata: string): string | undefined => /^PJSIP\/
 /** Only SELECT on vendor tables. No auth reads, provisioning projection, DDL or writes. */
 export class PbxInventoryReader implements InventoryReader {
   constructor(private readonly query: InventoryQuery) {}
+  async checkContacts(): Promise<void> {
+    try { await this.query('SELECT endpoint FROM ps_contacts LIMIT 1', []); }
+    catch { throw new DependencyUnavailableError('PBX contacts unavailable: verify SELECT grant on asterisk.ps_contacts for the inventory account'); }
+  }
+  async contacts(): Promise<PbxContact[]> {
+    const rows = bounded(await this.query('SELECT c.endpoint, e.context, c.uri, c.via_addr, c.user_agent, c.expiration_time FROM ps_contacts c JOIN ps_endpoints e ON BINARY e.id = BINARY c.endpoint WHERE c.expiration_time > UNIX_TIMESTAMP() LIMIT 1001', []));
+    return rows.map(row => ({ endpointId: String(row.endpoint), context: String(row.context), uri: String(row.uri), localIp: String(row.via_addr ?? ''), userAgent: String(row.user_agent ?? ''), expiresAt: Number(row.expiration_time) * 1000 }));
+  }
   async contexts(): Promise<string[]> {
     // BINARY-distinct: two contexts differing only by case are two scopes on this PBX.
     const rows = bounded(await this.query("SELECT MIN(context) AS context FROM (SELECT context FROM ps_endpoints WHERE context IS NOT NULL AND context <> '' UNION ALL SELECT context FROM extensions WHERE context IS NOT NULL AND context <> '') AS c GROUP BY BINARY context LIMIT 1001", []));

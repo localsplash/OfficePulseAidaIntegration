@@ -71,3 +71,14 @@ deferred. There is no separate AidaOfficePbxAdmin or AidaControl application.
 on the public listener. It is unavailable until native admission is enabled.
 See [the bootstrap runbook](AGENT_BOOTSTRAP.md) for the immutable profile,
 participant verification, native fallback, configuration and acceptance contract.
+
+## Handset contract
+
+The public `/v1/handset/` routes use registration-based attach and short-lived
+hashed device capabilities scoped by `{pbxInstanceId, context, endpointId}`.
+Private GET/DELETE `/v1/admin/handsets` use `context` and the existing backend
+boundary. The Operations gateway exposes these routes to central Super Admins.
+See [Handset API](HANDSET_API.md) and the canonical OpenAPI fixture for exact
+requests, hidden observer grants, queue alert payloads and handset-only takeover.
+Staff TAKEOVER still returns 503. Health/readiness include `environmentName` and
+`pbxInstanceId` for environment checks; Agent bootstrap v2 is unchanged.

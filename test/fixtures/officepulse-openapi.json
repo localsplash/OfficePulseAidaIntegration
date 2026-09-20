@@ -219,6 +219,1030 @@
         }
       }
     },
+    "/v1/handset/attach": {
+      "post": {
+        "tags": [
+          "Handset"
+        ],
+        "summary": "Attach from the phone’s live SIP registration",
+        "parameters": [],
+        "x-access-policy": "sip-registration-network-match",
+        "security": [],
+        "description": "Trusted-office POC: same-network registration matching identifies an endpoint, not physical hardware. Exactly one unexpired contact must match. Failures echo only the submitted public/local addresses, never other endpoints. Token expires in 24 hours by default.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "appInstanceId",
+                  "localIps",
+                  "deviceModel",
+                  "appVersion"
+                ],
+                "properties": {
+                  "appInstanceId": {
+                    "type": "string",
+                    "maxLength": 128
+                  },
+                  "localIps": {
+                    "type": "array",
+                    "maxItems": 32,
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "deviceModel": {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  "appVersion": {
+                    "type": "string",
+                    "maxLength": 80
+                  },
+                  "claimedMac": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success or recorded replay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "token": {
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "device": {
+                      "$ref": "#/components/schemas/Handset"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Takeover accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or expired device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Registration no longer matches or backend is not admitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource is absent or outside device scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "stale_version, takeover_in_progress or already_taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Source address rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/handset/me": {
+      "get": {
+        "tags": [
+          "Handset"
+        ],
+        "summary": "Read device scope and public queue subscriptions",
+        "parameters": [],
+        "x-access-policy": "handset-bearer",
+        "security": [
+          {
+            "handsetBearer": []
+          }
+        ],
+        "description": "Responses use Cache-Control: no-store. Handset calls require matching PBX instance, context and native queue membership.",
+        "responses": {
+          "200": {
+            "description": "Success or recorded replay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "device": {
+                      "$ref": "#/components/schemas/Handset"
+                    },
+                    "queues": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "channel": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "pusher": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "cluster": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or expired device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Registration no longer matches or backend is not admitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource is absent or outside device scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "stale_version, takeover_in_progress or already_taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Source address rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/handset/calls": {
+      "get": {
+        "tags": [
+          "Handset"
+        ],
+        "summary": "List screening and ringing queue calls",
+        "parameters": [],
+        "x-access-policy": "handset-bearer",
+        "security": [
+          {
+            "handsetBearer": []
+          }
+        ],
+        "description": "Responses use Cache-Control: no-store. Handset calls require matching PBX instance, context and native queue membership.",
+        "responses": {
+          "200": {
+            "description": "Success or recorded replay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "calls": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/HandsetCall"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or expired device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Registration no longer matches or backend is not admitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource is absent or outside device scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "stale_version, takeover_in_progress or already_taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Source address rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/handset/calls/{id}": {
+      "get": {
+        "tags": [
+          "Handset"
+        ],
+        "summary": "Read call and issue a hidden observer token after rechecking registration",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "x-access-policy": "handset-bearer",
+        "security": [
+          {
+            "handsetBearer": []
+          }
+        ],
+        "description": "Responses use Cache-Control: no-store. Handset calls require matching PBX instance, context and native queue membership.",
+        "responses": {
+          "200": {
+            "description": "Success or recorded replay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "call": {
+                      "$ref": "#/components/schemas/HandsetCall"
+                    },
+                    "livekit": {
+                      "type": "object",
+                      "properties": {
+                        "url": {
+                          "type": "string"
+                        },
+                        "token": {
+                          "type": "string"
+                        },
+                        "expiresIn": {
+                          "type": "integer",
+                          "enum": [
+                            120
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or expired device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Registration no longer matches or backend is not admitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource is absent or outside device scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "stale_version, takeover_in_progress or already_taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Source address rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/handset/calls/{id}/takeover": {
+      "post": {
+        "tags": [
+          "Handset"
+        ],
+        "summary": "Ring only this handset with guarded auto-answer",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "x-access-policy": "handset-bearer",
+        "security": [
+          {
+            "handsetBearer": []
+          }
+        ],
+        "description": "Responses use Cache-Control: no-store. Handset calls require matching PBX instance, context and native queue membership.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "idempotencyKey",
+                  "expectedCallVersion"
+                ],
+                "properties": {
+                  "idempotencyKey": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "expectedCallVersion": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success or recorded replay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Takeover accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or expired device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Registration no longer matches or backend is not admitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource is absent or outside device scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "stale_version, takeover_in_progress or already_taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Source address rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/handset/logout": {
+      "post": {
+        "tags": [
+          "Handset"
+        ],
+        "summary": "Revoke this token and remove its room observer",
+        "parameters": [],
+        "x-access-policy": "handset-bearer",
+        "security": [
+          {
+            "handsetBearer": []
+          }
+        ],
+        "description": "Responses use Cache-Control: no-store. Handset calls require matching PBX instance, context and native queue membership.",
+        "responses": {
+          "200": {
+            "description": "Success or recorded replay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or expired device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Registration no longer matches or backend is not admitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource is absent or outside device scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "stale_version, takeover_in_progress or already_taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Source address rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/handsets": {
+      "get": {
+        "tags": [
+          "Backend API"
+        ],
+        "summary": "List attached handsets in one context",
+        "parameters": [
+          {
+            "name": "context",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.-]{1,40}$"
+            }
+          }
+        ],
+        "x-access-policy": "trusted-backend-network",
+        "description": "Responses use Cache-Control: no-store. Handset calls require matching PBX instance, context and native queue membership.",
+        "responses": {
+          "200": {
+            "description": "Success or recorded replay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "handsets": {
+                      "type": "array",
+                      "items": {
+                        "allOf": [
+                          {
+                            "$ref": "#/components/schemas/Handset"
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "mac": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "publicIp": {
+                                "type": "string"
+                              },
+                              "localIp": {
+                                "type": "string"
+                              },
+                              "attachedAt": {
+                                "type": "string"
+                              },
+                              "lastSeenAt": {
+                                "type": "string"
+                              },
+                              "appVersion": {
+                                "type": "string"
+                              },
+                              "revokedAt": {
+                                "type": "string",
+                                "nullable": true
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or expired device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Registration no longer matches or backend is not admitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource is absent or outside device scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "stale_version, takeover_in_progress or already_taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Source address rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/handsets/{id}": {
+      "delete": {
+        "tags": [
+          "Backend API"
+        ],
+        "summary": "Revoke a handset session and remove it from rooms",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "context",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.-]{1,40}$"
+            }
+          }
+        ],
+        "x-access-policy": "trusted-backend-network",
+        "description": "Responses use Cache-Control: no-store. Handset calls require matching PBX instance, context and native queue membership.",
+        "responses": {
+          "200": {
+            "description": "Success or recorded replay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or expired device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Registration no longer matches or backend is not admitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource is absent or outside device scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "stale_version, takeover_in_progress or already_taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Source address rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/healthz": {
       "get": {
         "tags": [
@@ -236,6 +1260,17 @@
                     "status": {
                       "type": "string",
                       "example": "ok"
+                    },
+                    "pbxInstanceId": {
+                      "type": "string"
+                    },
+                    "environmentName": {
+                      "type": "string",
+                      "enum": [
+                        "dev",
+                        "staging",
+                        "prod"
+                      ]
                     },
                     "version": {
                       "type": "string",
@@ -1792,7 +2827,99 @@
     }
   },
   "components": {
+    "securitySchemes": {
+      "handsetBearer": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
     "schemas": {
+      "Handset": {
+        "type": "object",
+        "required": [
+          "id",
+          "pbxInstanceId",
+          "context",
+          "endpointId",
+          "extension"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "pbxInstanceId": {
+            "type": "string"
+          },
+          "context": {
+            "type": "string"
+          },
+          "endpointId": {
+            "type": "string"
+          },
+          "extension": {
+            "type": "string",
+            "nullable": true
+          },
+          "label": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "HandsetCall": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "screening",
+              "ringing",
+              "human-active",
+              "fallback",
+              "ended"
+            ]
+          },
+          "version": {
+            "type": "integer"
+          },
+          "queue": {
+            "type": "string"
+          },
+          "callerNumber": {
+            "type": "string"
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "agentParticipantSid": {
+            "type": "string"
+          },
+          "takeover": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "busy",
+                  "rejected",
+                  "no-answer",
+                  "failed"
+                ]
+              },
+              "mine": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
       "Error": {
         "type": "object",
         "properties": {
@@ -1813,6 +2940,14 @@
       "Readiness": {
         "type": "object",
         "properties": {
+          "environmentName": {
+            "type": "string",
+            "enum": [
+              "dev",
+              "staging",
+              "prod"
+            ]
+          },
           "pbxInstanceId": {
             "type": "string",
             "pattern": "^[A-Za-z0-9_.-]{1,80}$"

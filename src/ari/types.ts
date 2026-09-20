@@ -65,6 +65,7 @@ export type AriEvent =
   | (AriEventBase & Record<string, unknown>);
 
 export interface OriginateParams {
+  channelId?: string;
   endpoint: string;
   appArgs: string;
   callerId?: string;

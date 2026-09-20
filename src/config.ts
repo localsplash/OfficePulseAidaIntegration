@@ -13,6 +13,8 @@ export interface AppConfig {
   pbxProvisioningMysql?: RuntimeMysqlConfig;
   logLevel: 'debug' | 'info' | 'warn' | 'error';
   officePulseInstanceId: string;
+  environmentName?: 'dev' | 'staging' | 'prod';
+  handset: { requirePublicIpMatch: boolean; tokenTtlSeconds: number };
   fastAgi: {
     port: number;
     bind: string;
@@ -159,6 +161,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   if (officePulseInstanceId && !/^[A-Za-z0-9_.-]{1,80}$/.test(officePulseInstanceId)) {
     problems.push('OFFICEPULSE_INSTANCE_ID must match ^[A-Za-z0-9_.-]{1,80}$');
   }
+  const environmentName = optStr(env, 'ENVIRONMENT_NAME') as AppConfig['environmentName'];
+  if (environmentName && !['dev', 'staging', 'prod'].includes(environmentName)) {
+    problems.push('ENVIRONMENT_NAME must be dev, staging or prod');
+  }
+  if (environmentName && (/preview|copy|temp|tmp|backup|test/i.test(officePulseInstanceId) || !officePulseInstanceId.endsWith(`-${environmentName}`))) {
+    problems.push(`OFFICEPULSE_INSTANCE_ID '${officePulseInstanceId}' is not canonical for ENVIRONMENT_NAME '${environmentName}': use a permanent name ending in -${environmentName}`);
+  }
+  if (env.HANDSET_REQUIRE_PUBLIC_IP_MATCH !== undefined && !['true', 'false'].includes(env.HANDSET_REQUIRE_PUBLIC_IP_MATCH)) problems.push('HANDSET_REQUIRE_PUBLIC_IP_MATCH must be true or false');
 
   const logLevel = (env.LOG_LEVEL as AppConfig['logLevel']) || 'info';
   if (!['debug', 'info', 'warn', 'error'].includes(logLevel)) {
@@ -195,6 +205,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     } : undefined,
     logLevel,
     officePulseInstanceId,
+    environmentName,
+    handset: { requirePublicIpMatch: env.HANDSET_REQUIRE_PUBLIC_IP_MATCH !== 'false', tokenTtlSeconds: int(env, 'HANDSET_TOKEN_TTL_SECONDS', 86400, problems, 120, 86400) },
     fastAgi: {
       port: int(env, 'FASTAGI_PORT', 4573, problems, 1, 65535),
       bind: env.FASTAGI_BIND ?? '0.0.0.0',

@@ -22,6 +22,8 @@ export interface VideoGrant {
   canPublish?: boolean;
   canSubscribe?: boolean;
   canPublishData?: boolean;
+  canUpdateOwnMetadata?: boolean;
+  hidden?: boolean;
   agent?: boolean;
 }
 

@@ -1,3 +1,4 @@
+import { ConflictError } from '../../src/errors.js';
 import { randomUUID } from 'node:crypto';
 import type {
   CallEventRecord,
@@ -85,11 +86,19 @@ export class FakeRuntimeStore implements RuntimeStore {
 
   async claimControlCommand(
     command: ControlCommandRecord,
+    expectedVersion?: number,
+    requiredState?: string,
   ): Promise<{ claimed: boolean; existing?: ControlCommandRecord }> {
     this.guard('claimControlCommand');
     const key = `${command.callSessionId}|${command.idempotencyKey}`;
     const existing = this.commands.get(key);
     if (existing) return { claimed: false, existing };
+    const call = this.sessions.get(command.callSessionId);
+    if (call?.endedAt) throw new ConflictError('call has ended');
+    if (requiredState && call?.state !== requiredState && !(requiredState === 'screening' && ['admitted','agent-ready'].includes(call?.state ?? ''))) throw new ConflictError(call?.state === 'ringing' ? 'takeover_in_progress' : call?.state === 'human-active' ? 'already_taken' : 'call_not_screening');
+    if (requiredState && [...this.commands.values()].some(c => c.callSessionId === command.callSessionId && c.commandType === 'TAKEOVER' && c.status === 'in-progress')) throw new ConflictError('takeover_in_progress');
+    if (expectedVersion !== undefined && expectedVersion !== call?.version) throw new ConflictError('call version changed; refresh call state');
+    if (call) call.version++;
     this.commands.set(key, { ...command });
     return { claimed: true };
   }

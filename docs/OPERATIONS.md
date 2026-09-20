@@ -63,7 +63,7 @@ client addresses, and use a small request body limit. Do not point this host at
 the vendor Apache default page. Keep phone provisioning on its existing IP/port.
 
 On `officepulse-api.localsplash.dev`, proxy `/`, `/docs`, `/docs/`, `/docs/*` and
-`/openapi.json` to the public listener on 8086 alongside health and signed callbacks.
+`/openapi.json` to the public listener on 8086 alongside health, signed callbacks and `/v1/handset/` on 8086.
 Retain the existing trusted-backend ACL for `/v1/admin/` on 8085. Do not expose
 internal listener ports publicly. Swagger assets are bundled, require no CDN, and
 offer no interactive command submission.
@@ -129,3 +129,17 @@ For a source archive, set the same three environment variables before
 silently using the build clock. CI supplies these arguments automatically.
 `SOURCE_DATE_EPOCH` follows the [reproducible-builds source timestamp convention](https://reproducible-builds.org/docs/source-date-epoch/);
 the readable version follows [CalVer](https://calver.org/).
+
+## Handset deployment artifacts
+
+`deploy/nginx/officepulse-api.localsplash.dev.conf` is the exact installed API
+site, including the handset location. Compare it with
+`/etc/nginx/sites-available/officepulse-api-canonical` after installation to detect
+drift. Keep X-Forwarded-For overwritten and loopback-only proxy trust unchanged.
+`PUBLIC_URL=https://officepulse-api.localsplash.dev scripts/validate.sh` checks
+public handset routing. See [Handset API](HANDSET_API.md) for migration 007, contact
+read grants, Pusher settings, takeover dialplan and real-phone acceptance.
+
+Health and readiness also report `environmentName` and `pbxInstanceId`, resolved
+from PlatformConfig before startup. Follow the README naming/migration procedure
+so profile assignments change in lockstep and historical calls remain untouched.

@@ -1,3 +1,6 @@
+import { deviceRoutes, DeviceDirectory } from './devices/access.js';
+import { MysqlDeviceStore } from './devices/mysqlDeviceStore.js';
+import { DeviceRoomGuard } from './devices/roomGuard.js';
 import { digest, sameHash } from './agent/contract.js';
 import { agentConfig } from './agent/config.js';
 import { MysqlAdmissionStore } from './agent/store.js';
@@ -40,7 +43,9 @@ async function main(): Promise<void> {
   const agent = agentConfig(environment);
   await migrateRuntime(config.runtimeMysql);
   const logger = new Logger({ level: config.logLevel });
+  if (!config.environmentName) logger.warn('ENVIRONMENT_NAME is absent; canonical PBX naming checks are disabled', { pbxInstanceId: config.officePulseInstanceId });
   const runtime = new MysqlRuntimeStore(config.runtimeMysql);
+  const devices = new MysqlDeviceStore(config.runtimeMysql, runtime);
   const inventory = config.pbxInventoryMysql ? mysqlPbxInventory(config.pbxInventoryMysql) : undefined;
   const provisioner = config.pbxProvisioningMysql ? new MysqlPbxProvisioner(config.pbxProvisioningMysql) : undefined;
   const noco = new NocoDbReadClient(config.nocodb);
@@ -72,7 +77,7 @@ async function main(): Promise<void> {
   const authority = agent && admissions && native ? new BootstrapAuthority({ store: admissions, runtime,
     native: native.authority, livekit, routeAttribute: agent.routeAttribute, instanceId: config.officePulseInstanceId }) : undefined;
   let monitor: AgentMonitor | undefined;
-  const takeover = new TakeoverManager({ ari, events: new RuntimeCallEventSink(runtime, logger, livekit), logger,
+  const takeover = new TakeoverManager({ ari, events: new RuntimeCallEventSink(runtime, logger, livekit, notifier), logger,
     drainTimeoutMs: config.takeover.drainTimeoutMs, defaultRingTimeoutSeconds: config.takeover.ringTimeoutSeconds,
     defaultMohClass: config.takeover.defaultMohClass, livekitTrunkEndpoint: config.takeover.livekitTrunkEndpoint,
     ...(admissions ? { nativeAdmission: {
@@ -100,8 +105,14 @@ async function main(): Promise<void> {
   }) : nativePbxFallback;
   ari.on('connected', () => { void takeover.reconcile().catch((err) => logger.error('reconciliation failed', { err })); });
   const noInventory: InventoryReader = { contexts: async () => [], extensions: async () => [], queues: async () => [] };
+  const directory = new DeviceDirectory(inventory?.reader ?? noInventory, config.handset.requirePublicIpMatch);
+  const roomGuard = new DeviceRoomGuard({ rooms: livekit, devices, runtime, directory, pbxInstanceId: config.officePulseInstanceId, logger });
   const routes = assembleApiRoutes(
     [
+      ...deviceRoutes({ store: devices, runtime, directory, pbxInstanceId: config.officePulseInstanceId, ...config.handset,
+        livekit: config.livekit, pusher: config.pusher ? { key: config.pusher.key, cluster: config.pusher.cluster } : undefined,
+        takeover, ringTimeoutSeconds: config.takeover.ringTimeoutSeconds, voiceEnabled: config.voiceEnabled,
+        removeFromRooms: id => config.voiceEnabled ? roomGuard.removeDevice(id) : Promise.resolve() }),
       ...(authority ? [authority.route(config.voiceEnabled)] : [{ method: 'POST', pattern: '/v1/agent/calls/:callSessionId/bootstrap', trusted: false, rawBody: true,
         handler: () => ({ status: 503, body: { error: 'authority_unavailable' } }) }]),
       ...pbxInventoryRoutes(inventory?.reader ?? noInventory, !!inventory, config.officePulseInstanceId, !!provisioner),
@@ -115,7 +126,7 @@ async function main(): Promise<void> {
   const fastAgi = new FastAgiServer({ ...config.fastAgi, logger,
     handlers: { bootstrap: createBootstrapHandler({ orchestrator,
       officePulseInstanceId: config.officePulseInstanceId, logger }) } });
-  const options = { logger, readiness, pbxInstanceId: config.officePulseInstanceId, trustedServerCidrs: config.http.trustedServerCidrs, trustedProxyCidrs: config.http.trustedProxyCidrs,
+  const options = { logger, readiness, environmentName: config.environmentName, pbxInstanceId: config.officePulseInstanceId, trustedServerCidrs: config.http.trustedServerCidrs, trustedProxyCidrs: config.http.trustedProxyCidrs,
     maxBodyBytes: config.http.maxBodyBytes, rateLimitPerMinute: config.http.rateLimitPerMinute, routes };
   const privateApi = new HttpApi(options);
   // Public routes authenticate with a webhook signature or one-time Agent credentials.
@@ -140,16 +151,17 @@ async function main(): Promise<void> {
   const probe = async () => {
     if (config.voiceEnabled) {
       void livekit.ping().then((ok) => readiness.set('livekit', ok));
-      if (notifier) void notifier.ping().then((ok) => readiness.set('pusher', ok));
+      void roomGuard.sweep();
     }
+    if (notifier) void notifier.ping().then((ok) => readiness.set('pusher', ok));
     const [runtimeReady, nocoReady] = await Promise.all([runtime.ping(), noco.ping()]);
     readiness.set('runtime-mysql', runtimeReady);
     readiness.set('nocodb', nocoReady);
 
     if (inventory) {
       // Listing contexts touches both native tables the context-scoped reads depend on.
-      try { await inventory.reader.contexts(); readiness.set('pbx-inventory', true); }
-      catch { readiness.set('pbx-inventory', false, 'PBX inventory unavailable; verify connection, schema and grants'); }
+      try { await inventory.reader.contexts(); await inventory.reader.checkContacts?.(); readiness.set('pbx-inventory', true); }
+      catch { readiness.set('pbx-inventory', false, 'PBX inventory unavailable; verify connection, schema and SELECT grants including asterisk.ps_contacts'); }
     }
     if (provisioner) {
       const connected = await provisioner.ping();
@@ -178,7 +190,7 @@ async function main(): Promise<void> {
     clearInterval(timer);
     profiles?.stop();
     ari.stop();
-    void Promise.allSettled([fastAgi.close(), privateApi.close(), publicApi.close(), operations?.close(), monitor?.close(), admissions?.close(), native?.close(), runtime.close(), inventory?.close(), provisioner?.close()]).then(() => process.exit(0));
+    void Promise.allSettled([fastAgi.close(), privateApi.close(), publicApi.close(), operations?.close(), monitor?.close(), admissions?.close(), native?.close(), runtime.close(), devices.close(), inventory?.close(), provisioner?.close()]).then(() => process.exit(0));
     setTimeout(() => process.exit(1), 10000).unref();
   };
   process.on('SIGTERM', shutdown);

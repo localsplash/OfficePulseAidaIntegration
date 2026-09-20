@@ -69,7 +69,7 @@ export class FakeNotifier implements Notifier {
   alerts: Array<{ deviceId: string; alert: CallAlert }> = [];
   fail = false;
 
-  async publishCallStarted(deviceId: string, alert: CallAlert): Promise<boolean> {
+  async publishCallState(deviceId: string, alert: CallAlert): Promise<boolean> {
     if (this.fail) throw new Error('pusher unavailable');
     this.alerts.push({ deviceId, alert });
     return true;

@@ -102,3 +102,11 @@ test('a NocoDB failure during the Identity lookup is a configuration error, not 
   };
   await assert.rejects(resolvePlatformSettings({}, flaky), message('Identity APP_BASE_URL lookup failed: NocoDB /records returned 503'));
 });
+
+test('shared environment and central instance resolve with a deliberate multi-PBX host override', async () => {
+  const rows = [setting('*', 'ENVIRONMENT_NAME', 'dev'), setting('officepulse', 'OFFICEPULSE_INSTANCE_ID', 'officepulse-dev')];
+  const central = await resolvePlatformSettings({}, api(rows));
+  assert.equal(central.ENVIRONMENT_NAME, 'dev'); assert.equal(central.OFFICEPULSE_INSTANCE_ID, 'officepulse-dev');
+  const host = await resolvePlatformSettings({ OFFICEPULSE_INSTANCE_ID: 'officepulse2-dev' }, api(rows));
+  assert.equal(host.OFFICEPULSE_INSTANCE_ID, 'officepulse2-dev'); assert.equal(host.ENVIRONMENT_NAME, 'dev');
+});

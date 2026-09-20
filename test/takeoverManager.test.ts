@@ -283,3 +283,50 @@ test('a caller with no SIP destination is released to the dialplan fallback', as
   assert.deepEqual(ari.continued, [{ channelId: caller.id, context: 'aida-post-bootstrap', exten: 's' }]);
   assert.equal(ari.originates.length, 0);
 });
+
+test('handset takeover passes inherited guards, bounded ring time and original caller ID', async () => {
+  const { manager, ari, sink } = makeManager();
+  await screenCall(ari);
+  await manager.takeover({ ...CMD, context: 'aida-takeover', exten: '411', deviceId: 'device-one', ringTimeoutSeconds: 15 });
+  const originate = ari.originates[1]!;
+  assert.equal(originate.endpoint, 'Local/411@aida-takeover');
+  assert.equal(originate.callerId, '15551230001');
+  assert.equal(originate.variables?.__AIDA_TAKEOVER, '1');
+  assert.equal(originate.variables?.__AIDA_TAKEOVER_RING_SECONDS, '15');
+  assert.equal(originate.variables?.['PJSIP_HEADER(add,Call-Info)'], undefined, 'header belongs on the outbound PJSIP leg only');
+  assert.equal(sink.events.find(e => e.eventType === 'takeover-requested')?.payload?.deviceId, 'device-one');
+});
+
+test('caller hanging up while originate is pending releases the late human leg', async () => {
+  const { manager, ari } = makeManager(); const { caller } = await screenCall(ari);
+  const realOriginate = ari.originate.bind(ari);
+  let release!: () => void; const blocked = new Promise<void>(resolve => { release = resolve; });
+  ari.originate = async args => { await blocked; return realOriginate(args); };
+  const pending = manager.takeover({ ...CMD, context: 'aida-takeover', exten: '411' });
+  await tick(); ari.emitDestroyed(caller, 16); await tick(); release();
+  assert.equal((await pending).status, 'failed');
+  assert.ok(ari.hangups.some(h => h.channelId === ari.originatedChannels[1]!.id));
+});
+
+test('a busy SIP result arriving before originate responds is correlated and leaves Aida connected', async () => {
+  const { manager, ari, sink } = makeManager(); const { caller, livekit, bridgeId } = await screenCall(ari);
+  const real = ari.originate.bind(ari);
+  ari.originate = async args => { const channel = await real(args); ari.emitDestroyed(channel, 17); await tick(); return channel; };
+  const result = await manager.takeover({ ...CMD, context: 'aida-takeover', exten: '411' });
+  assert.equal(result.status, 'busy'); assert.equal(manager.getSession(CS)?.activeCommandKey, undefined);
+  assert.equal(ari.mohStarts.length, 0); assert.ok(ari.bridges.get(bridgeId)?.channels.has(caller.id)); assert.ok(ari.bridges.get(bridgeId)?.channels.has(livekit.id));
+  assert.equal(sink.events.find(e => e.eventType === 'takeover-failed')?.payload?.reason, 'busy');
+});
+
+test('failed human bridging reports failure and preserves the caller/Aida bridge', async () => {
+  const { manager, ari, sink } = makeManager(); const { caller, livekit, bridgeId } = await screenCall(ari);
+  await manager.takeover(CMD); const human = ari.originatedChannels[1]!;
+  ari.addToBridge = async () => { throw new Error('bridge unavailable'); };
+  ari.emitStasisStart(['human', CS, CMD.idempotencyKey], human); await tick();
+  assert.equal(manager.getSession(CS)?.humanAnswered, false);
+  assert.equal(manager.getSession(CS)?.activeCommandKey, undefined);
+  assert.ok(ari.bridges.get(bridgeId)?.channels.has(caller.id)); assert.ok(ari.bridges.get(bridgeId)?.channels.has(livekit.id));
+  assert.deepEqual(ari.hangups.map(h => h.channelId), [human.id]);
+  assert.equal(sink.events.find(e => e.eventType === 'takeover-failed')?.payload?.reason, 'failed');
+  assert.ok(!sink.types().includes('bridged'));
+});

@@ -12,13 +12,15 @@ import { UpstreamError } from '../errors.js';
  */
 
 export interface CallAlert {
+  v: 1;
+  state: string;
   eventId: string;
   callSessionId: string;
   occurredAt: string;
 }
 
 export interface Notifier {
-  publishCallStarted(deviceId: string, alert: CallAlert): Promise<boolean>;
+  publishCallState(channel: string, alert: CallAlert): Promise<boolean>;
   ping(): Promise<boolean>;
 }
 
@@ -32,9 +34,12 @@ export interface PusherOptions {
   fetchImpl?: typeof fetch;
 }
 
-/** Per-device private channel; no tenant id or extension number in the name. */
-export function deviceChannel(deviceId: string): string {
-  return `private-aida-device-${deviceId}`;
+/** Stable public queue channel. Payloads contain state and opaque call identifiers only. */
+export function queueChannel(pbxInstanceId: string, context: string, queue: string): string {
+  const parts = [pbxInstanceId, context, queue];
+  if (parts.some(part => !/^[A-Za-z0-9_.@,=-]+$/.test(part))) throw new Error('invalid queue channel scope');
+  const name = `aida;${parts.join(';')}`;
+  return name.length <= 164 ? name : `aida;h;${createHash('sha256').update(name).digest('hex').slice(0, 40)}`;
 }
 
 export class PusherNotifier implements Notifier {
@@ -44,11 +49,11 @@ export class PusherNotifier implements Notifier {
     this.fetchImpl = opts.fetchImpl ?? fetch;
   }
 
-  async publishCallStarted(deviceId: string, alert: CallAlert): Promise<boolean> {
+  async publishCallState(channel: string, alert: CallAlert): Promise<boolean> {
     const body = JSON.stringify({
-      name: 'aida.call.started',
-      channel: deviceChannel(deviceId),
-      data: JSON.stringify(alert),
+      name: 'call',
+      channel,
+      data: JSON.stringify({ v: 1, eventId: alert.eventId, callSessionId: alert.callSessionId, state: alert.state, occurredAt: alert.occurredAt }),
     });
     try {
       await this.request('POST', `/apps/${this.opts.appId}/events`, body);

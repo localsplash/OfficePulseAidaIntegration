@@ -13,8 +13,7 @@ device modules and their tests remain. With voice enabled, ARI reconciliation,
 signed LiveKit callbacks and FastAGI still run. Agent bootstrap v2 and native
 queue admission are available through explicit opt-in configuration; disabled
 admission preserves PBX fallback. TAKEOVER returns 503 before recording a command
-until its separate native destination resolver is supplied. DRAIN_ACK remains supported. Canonical device admission is unwired until
-native PBX authorization is defined. AidaHandset/AidaAgent work is deferred.
+until its separate native destination resolver is supplied. DRAIN_ACK remains supported. Handset attach, scoped observation and device-targeted takeover use live native SIP registrations and queue membership.
 
 ## Current API
 
@@ -24,10 +23,12 @@ native PBX authorization is defined. AidaHandset/AidaAgent work is deferred.
 | Private `HTTP_PORT=8085` | extension, queue, queue-member and DID mutations under `/v1/admin/pbx` | Explicit opt-in writer; same context scope and Admin controls (DID routes add `didContext`) |
 | Private `HTTP_PORT=8085` | `/v1/admin/calls/:id`, `/v1/admin/calls/:id/events` | Read-only observed integration call history |
 | Private `HTTP_PORT=8085` | POST `/v1/admin/calls/:id/commands` | DRAIN_ACK with voice enabled; TAKEOVER unavailable until native routing exists |
+| Private `HTTP_PORT=8085` | GET/DELETE `/v1/admin/handsets` | Context-scoped device administration |
+| Public `PUBLIC_HTTP_PORT=8086` | `/v1/handset/attach`, `/me`, `/calls`, `/logout`, call detail/takeover | Registration matching then device bearer auth; see handset runbook |
 | Public `PUBLIC_HTTP_PORT=8086` | POST `/v1/agent/calls/:id/bootstrap` | One-time call credentials; explicit native admission opt-in |
 | Public `PUBLIC_HTTP_PORT=8086` | `/healthz`, `/readyz`, signed LiveKit webhook | Callback verifies signature; disabled voice returns 503 |
 
-Legacy `/v1/provisioning` and canonical device paths remain absent. The smaller
+Legacy `/v1/provisioning`, `/v1/devices` and device `/v1/calls` paths remain absent. The smaller
 PBX writer exists only under `/v1/admin/pbx` when explicitly enabled.
 The private API is not browser authentication: AidaAdmin must authenticate its
 staff actor, authorize the requested tenant, resolve that tenant's Asterisk
@@ -74,7 +75,7 @@ admission reads the persisted per-context/DID profile assignments
 responses, dispatch metadata and profile snapshots). `FASTAGI_PORT` defaults to 4573,
 `FASTAGI_BIND` to 0.0.0.0. Existing takeover timing/MOH and optional Pusher settings
 remain supported. PBX writer credentials are required only when its opt-in flag
-is enabled; Device admission remains separate. Native Agent admission uses the opt-in
+is enabled; Handset device admission uses live registration matching. Native Agent admission uses the opt-in
 settings in the bootstrap runbook; it loads the per-context/DID profile assignments at
 startup and refreshes them in the background, so admission and active calls issue no
 Identity or NocoDB request.
@@ -156,3 +157,26 @@ Realtime routing requirements, and apply-state limits.
 See [Agent bootstrap v2](docs/AGENT_BOOTSTRAP.md) for the #18/#19/#22/#23 implementation,
 credential/profile contracts, context-scoped admission, native ingress and SIP prerequisites,
 and live-call acceptance.
+
+## Handsets and environment naming
+
+Read [Handset API](docs/HANDSET_API.md) for registration-based attach, queue alerts,
+hidden LiveKit observation, takeover, trust assumptions and deployment checks.
+Attached handsets are listed in the Operations UI under the selected context.
+
+Set `ENVIRONMENT_NAME` (`dev`, `staging`, `prod`) in PlatformConfig scope `*` and
+`OFFICEPULSE_INSTANCE_ID` in scope `officepulse`. Health/readiness return both.
+The instance must end with `-${ENVIRONMENT_NAME}` and may not contain
+`preview`, `copy`, `temp`, `tmp`, `backup`, or `test` (case-insensitive). Missing
+environment preserves legacy behavior with a startup warning. A multi-PBX host
+may explicitly override the instance id in its environment; it must still obey
+the central environment name. AidaAdmin's environment mismatch UI is owned by
+localsplash/AidaAdmin#45; Agent bootstrap remains v2.
+
+On dev use `officepulse-dev`. With no active calls, first rename its persisted
+`aida_tbl_ProfileAssignment.pbx_instance_id`, then set the central instance and
+remove its env override, and restart. Do not rename historical call records.
+Verify `agent-config-cache` has at least one cached assignment and native admission
+is ready; then validate a real admitted call. Bootstrap credentials alone should
+remain in the service env file (`NOCODB_BASE_URL`, `NOCODB_API_TOKEN`); move other
+host settings into `officepulse` scope, with secrets marked `bSecret=1`.

@@ -11,3 +11,5 @@ GRANT SELECT ON asterisk.queue_members TO 'aida_pbx_inventory_ro'@'__OFFICEPULSE
 -- context listing, including after the writer is disabled. Native admission reuses
 -- this account for the same SELECTs (extensions, queues); no further grant is needed.
 GRANT SELECT ON asterisk.extensions TO 'aida_pbx_inventory_ro'@'__OFFICEPULSE_API_IP__';
+
+GRANT SELECT ON asterisk.ps_contacts TO 'aida_pbx_inventory_ro'@'__OFFICEPULSE_API_IP__';

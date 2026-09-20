@@ -107,7 +107,7 @@ export interface RuntimeStore {
   /** Durable lifecycle projection and receipt in one transaction (production store). */
   applyCallEvent?(callSessionId: string, event: {
     eventType: string; occurredAt: string; idempotencyKey: string; payload?: Record<string, unknown>;
-  }, state?: string): Promise<void>;
+  }, state?: string): Promise<{ stateChanged: boolean; state?: string }>;
 
   /**
    * Claim a command by (session, idempotency key). `claimed: false` means
@@ -116,6 +116,7 @@ export interface RuntimeStore {
   claimControlCommand(
     command: ControlCommandRecord,
     expectedVersion?: number,
+    requiredState?: string,
   ): Promise<{ claimed: boolean; existing?: ControlCommandRecord }>;
   completeControlCommand(
     callSessionId: string,

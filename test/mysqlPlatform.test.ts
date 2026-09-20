@@ -5,11 +5,12 @@ import mysql from 'mysql2/promise';
 import { migrateRuntime } from '../src/runtime/migrate.js';
 import { MysqlRuntimeStore } from '../src/runtime/mysqlRuntimeStore.js';
 import { MysqlDeviceStore } from '../src/devices/mysqlDeviceStore.js';
+import { sampleDevice } from './helpers/handset.js';
 import { credentialHash } from '../src/devices/access.js';
 
 // Opt-in and deliberately refuses arbitrary schemas. Never point at a deployed database.
 const url = process.env.TEST_MYSQL_URL;
-test('MySQL platform migration, enrollment and call-command concurrency', { skip: !url }, async (t) => {
+test('MySQL platform migration, device replacement and call-command concurrency', { skip: !url }, async (t) => {
   const parsed = new URL(url!);
   const database = parsed.pathname.slice(1);
   assert.match(database, /^aida_[a-z0-9_]+_test$/);
@@ -36,7 +37,7 @@ test('MySQL platform migration, enrollment and call-command concurrency', { skip
       for (const table of retired) await assert.rejects(connection.query(`SELECT * FROM ${table}`), /doesn't exist/);
       const [rows] = await connection.query<mysql.RowDataPacket[]>("SELECT name FROM dependency_status WHERE name='provisioning-adapter'");
       assert.equal(rows.length, 0);
-      for (const table of ['aida_tbl_DeviceEnrollment', 'aida_tbl_DeviceSession', 'aida_tbl_EventReceipt']) await connection.query(`SELECT * FROM ${table} LIMIT 1`);
+      for (const table of ['handset_device', 'aida_tbl_EventReceipt']) await connection.query(`SELECT * FROM ${table} LIMIT 1`);
     });
     await t.test('migration rerun preserves existing call data', async () => {
       await migrateRuntime(config);
@@ -44,13 +45,15 @@ test('MySQL platform migration, enrollment and call-command concurrency', { skip
     });
     let deviceId = '';
     const sessionHashes = [credentialHash(randomUUID()), credentialHash(randomUUID())];
-    await t.test('concurrent enrollment consumes one capability and stores only hashes', async () => {
-      const hash = credentialHash(randomUUID());
-      await devices.issueEnrollment(hash, 1, extensionId);
-      const results = await Promise.all(sessionHashes.map((h) => devices.consumeEnrollment(hash, 'test-hardware', h)));
+    await t.test('concurrent attaches leave one live session for an endpoint and store only hashes', async () => {
+      const grants = [sampleDevice(), sampleDevice()];
+      await Promise.all(grants.map((d, i) => devices.attach(d, sessionHashes[i]!)));
+      const results = await Promise.all(sessionHashes.map(h => devices.resolveSession(h)));
       assert.equal(results.filter(Boolean).length, 1);
       deviceId = results.find(Boolean)!.id;
-      assert.equal((await devices.getDevice(deviceId))?.iTenantId, 1);
+      assert.equal((await devices.getDevice(deviceId))?.endpointId, '411');
+      const [rows] = await connection.query<mysql.RowDataPacket[]>('SELECT token_hash FROM handset_device');
+      assert.ok(rows.every(row => /^[0-9a-f]{64}$/.test(row.token_hash)));
     });
     await t.test('revocation removes all token resolution for a device', async () => {
       await devices.revokeDevice(deviceId);
@@ -94,9 +97,34 @@ test('MySQL platform migration, enrollment and call-command concurrency', { skip
       await runtime.updateCallSession(call.id, { endedAt: new Date().toISOString(), state: 'ended' });
       await assert.rejects(runtime.claimControlCommand({ ...command, idempotencyKey: 'late' }), /ended/);
       assert.equal((await runtime.claimControlCommand(command, 1)).claimed, false);
-      assert.deepEqual(await devices.listCalls('1', [extensionId]), []);
+      assert.deepEqual(await devices.listCalls(sampleDevice(), [extensionId]), []);
     });
   } finally {
     await devices.close(); await runtime.close(); await connection.end();
   }
+});
+
+test('MySQL handset claiming checks device concurrency atomically and lifecycle alerts track effective state', { skip: !url }, async () => {
+  const parsed = new URL(url!); const config = { host: parsed.hostname, port: Number(parsed.port || 3306), user: decodeURIComponent(parsed.username), password: decodeURIComponent(parsed.password), database: parsed.pathname.slice(1) };
+  await migrateRuntime(config); const runtime = new MysqlRuntimeStore(config);
+  try {
+    const call = (await runtime.createCallSession({ id: randomUUID(), asteriskLinkedId: randomUUID(), officePulseInstanceId: 'officepulse-dev', pbxContext: 'office', tenantId: '1', didE164: '+15555550123', config: {}, destinationType: 'QUEUE', destinationId: 'sales', disposition: 'SCREEN', state: 'agent-ready' })).session;
+    const event = (eventType: string) => ({ eventType, idempotencyKey: randomUUID(), occurredAt: new Date().toISOString() });
+    const screening = event('screening-started');
+    assert.equal((await runtime.applyCallEvent(call.id, screening, 'screening')).stateChanged, true);
+    assert.equal((await runtime.applyCallEvent(call.id, screening, 'screening')).stateChanged, false);
+    assert.equal((await runtime.getCallSession(call.id))?.state, 'agent-ready');
+    const results = await Promise.allSettled(['phone1','phone2'].map(deviceId => runtime.claimControlCommand({ callSessionId: call.id, idempotencyKey: deviceId, commandType: 'TAKEOVER', payload: { deviceId, endpointId: '411' }, status: 'in-progress' }, call.version, 'screening')));
+    assert.equal(results.filter(r => r.status === 'fulfilled').length, 1);
+    assert.equal((results.find(r => r.status === 'rejected') as PromiseRejectedResult).reason.message, 'takeover_in_progress');
+    assert.equal((await runtime.applyCallEvent(call.id, event('takeover-requested'), 'ringing')).stateChanged, true);
+    assert.equal((await runtime.applyCallEvent(call.id, event('aida-connected'), 'screening')).stateChanged, false);
+    assert.equal((await runtime.getCallSession(call.id))?.state, 'ringing');
+    assert.equal((await runtime.applyCallEvent(call.id, event('ringing'), 'ringing')).stateChanged, false);
+    assert.equal((await runtime.applyCallEvent(call.id, event('takeover-failed'), 'screening')).stateChanged, true);
+    await runtime.updateCallSession(call.id, { state: 'fallback' });
+    assert.equal((await runtime.applyCallEvent(call.id, event('pbx-fallback'), 'fallback')).stateChanged, true);
+    assert.equal((await runtime.applyCallEvent(call.id, event('aida-connected'), 'screening')).stateChanged, false);
+    assert.equal((await runtime.applyCallEvent(call.id, event('pbx-fallback'), 'fallback')).stateChanged, false);
+  } finally { await runtime.close(); }
 });

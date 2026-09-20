@@ -143,3 +143,15 @@ test('PBX writer cannot reuse inventory or runtime account names', () => {
       PBX_INVENTORY_ENABLED: 'true', PBX_INVENTORY_MYSQL_USER: 'inventory_ro', PBX_INVENTORY_MYSQL_PASSWORD: 'unused' }), /dedicated account/);
   }
 });
+
+test('environment naming accepts permanent matching names and refuses mismatches or temporary names', () => {
+  for (const name of ['dev', 'staging', 'prod']) assert.equal(loadConfig({ ENVIRONMENT_NAME: name, OFFICEPULSE_INSTANCE_ID: `officepulse-${name}` }).environmentName, name);
+  for (const id of ['dockerappvm01-dev-preview', 'officepulse-prod', 'COPY-dev', 'temp-dev', 'tmp-dev', 'backup-dev', 'test-dev']) {
+    assert.throws(() => loadConfig({ ENVIRONMENT_NAME: 'dev', OFFICEPULSE_INSTANCE_ID: id }), new RegExp(`OFFICEPULSE_INSTANCE_ID '${id}'.*ENVIRONMENT_NAME 'dev'`));
+  }
+  assert.equal(loadConfig({ OFFICEPULSE_INSTANCE_ID: 'legacy-preview' }).environmentName, undefined);
+  assert.throws(() => loadConfig({ ENVIRONMENT_NAME: 'unknown' }), /ENVIRONMENT_NAME must/);
+  assert.equal(loadConfig({}).handset.requirePublicIpMatch, true);
+  assert.equal(loadConfig({}).handset.tokenTtlSeconds, 86400);
+  assert.throws(() => loadConfig({ HANDSET_TOKEN_TTL_SECONDS: '999999' }), /HANDSET_TOKEN_TTL_SECONDS/);
+});

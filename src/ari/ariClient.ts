@@ -149,6 +149,7 @@ export class AriClient extends EventEmitter implements AriApi {
       appArgs: params.appArgs,
     };
     if (params.callerId) query.callerId = params.callerId;
+    if (params.channelId) query.channelId = params.channelId;
     if (params.timeoutSeconds !== undefined) query.timeout = String(params.timeoutSeconds);
     return this.request<AriChannel>('POST', '/channels', query, params.variables ? { variables: params.variables } : undefined);
   }

@@ -16,7 +16,7 @@ async function withApi(
   const api = new HttpApi({
     logger,
     readiness,
-    pbxInstanceId: 'op-test',
+    pbxInstanceId: 'op-test', environmentName: 'dev',
     trustedServerCidrs: opts?.trustedServerCidrs ?? ['127.0.0.1/32'],
     trustedProxyCidrs: [],
     maxBodyBytes: opts?.maxBodyBytes ?? 1024,
@@ -51,7 +51,7 @@ test('healthz is open; readyz reflects dependency state', async () => {
   await withApi(async (base, readiness) => {
     const health = await fetch(`${base}/healthz`);
     assert.equal(health.status, 200);
-    assert.deepEqual(await health.json(), { status: 'ok', ...buildInfo });
+    assert.deepEqual(await health.json(), { status: 'ok', ...buildInfo, pbxInstanceId: 'op-test', environmentName: 'dev' });
     const ready = await fetch(`${base}/readyz`);
     assert.equal(ready.status, 200);
     // Both listeners name the serving PBX instance so a client can pin the scope it administers.

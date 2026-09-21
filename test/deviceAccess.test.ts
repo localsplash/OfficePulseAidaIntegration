@@ -139,3 +139,16 @@ test('two attached queue members cannot originate simultaneous takeovers', async
   const failed = results.find(r => r.status === 'rejected') as PromiseRejectedResult;
   assert.equal(failed.reason.message, 'takeover_in_progress'); assert.equal(f.state.commands.length, 1);
 });
+
+test('admin handset inventory exposes the stored model and display fields without credentials', async () => {
+  const f = handsetFixture(); const attached = await f.attach();
+  const response = await f.invoke('/v1/admin/handsets');
+  assert.equal(response.status, 200);
+  const device = (response.body as { handsets: Record<string, unknown>[] }).handsets[0]!;
+  assert.equal(device.id, attached.device.id);
+  assert.equal(device.deviceModel, f.attachBody.deviceModel);
+  assert.equal(device.localIp, '192.168.1.10');
+  assert.equal(device.publicIp, '203.0.113.1');
+  assert.equal(device.token, undefined);
+  assert.equal(device.tokenHash, undefined);
+});

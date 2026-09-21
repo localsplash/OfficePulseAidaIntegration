@@ -1021,6 +1021,9 @@
                           {
                             "type": "object",
                             "properties": {
+                              "deviceModel": {
+                                "type": "string"
+                              },
                               "mac": {
                                 "type": "string",
                                 "nullable": true

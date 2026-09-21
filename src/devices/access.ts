@@ -181,7 +181,7 @@ export function deviceRoutes(o: DeviceAccessOptions): Route[] {
     { method: 'GET', pattern: '/v1/admin/handsets', operationsAccess: { scope: 'context-query', query: 'context' }, handler: async req => {
       const devices = await o.store.listDevices(o.pbxInstanceId, contextQuery(req.query));
       return { status: 200, body: { handsets: devices.map(d => ({ ...deviceDto(d), mac: d.mac, publicIp: d.publicIp, localIp: d.localIp,
-        attachedAt: d.attachedAt, lastSeenAt: d.lastSeenAt, appVersion: d.appVersion, revokedAt: d.revokedAt })) } };
+        deviceModel: d.deviceModel, attachedAt: d.attachedAt, lastSeenAt: d.lastSeenAt, appVersion: d.appVersion, revokedAt: d.revokedAt })) } };
     } },
     { method: 'DELETE', pattern: '/v1/admin/handsets/:id', operationsAccess: { scope: 'context-query', query: 'context' }, handler: async req => {
       const context = contextQuery(req.query);

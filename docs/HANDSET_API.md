@@ -33,6 +33,13 @@ Zero contact matches return 403 `handset_not_recognized`; multiple matches retur
 409 `handset_ambiguous`. These errors echo only the compared request `publicIp`
 and normalized `localIps`, never registration rows or other endpoints.
 
+Every `/v1/handset/*` request is recorded, always on, in
+`/var/log/officepulse-aida-integration/handset-requests-YYYY-MM-DD.jsonl` (UTC days,
+systemd `LogsDirectory=`): client IP, user agent, request body, status and error.
+Valid JSON is stored parsed with secret-looking keys redacted; anything else as text.
+The bearer header and response bodies (which carry the token) are never recorded.
+The service deletes day files older than 14 days.
+
 Device tokens contain 32 random bytes, base64url encoded. Only SHA-256 hashes are
 stored, with a default 24-hour expiry (`HANDSET_TOKEN_TTL_SECONDS`, maximum 86400).
 A new attach supersedes earlier sessions for the same app install or endpoint on

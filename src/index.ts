@@ -34,6 +34,7 @@ import { operationsConfig } from './operations/config.js';
 import { OperationsServer } from './operations/server.js';
 import { HttpOperationsIdentity } from './operations/identity.js';
 import { AriDiagnostics } from './operations/live.js';
+import { RequestBodyLog } from './logging/requestBodyLog.js';
 
 /** PBX configuration belongs to Asterisk; voice primitives never read a copied NocoDB routing graph. */
 async function main(): Promise<void> {
@@ -127,7 +128,8 @@ async function main(): Promise<void> {
     handlers: { bootstrap: createBootstrapHandler({ orchestrator,
       officePulseInstanceId: config.officePulseInstanceId, logger }) } });
   const options = { logger, readiness, environmentName: config.environmentName, pbxInstanceId: config.officePulseInstanceId, trustedServerCidrs: config.http.trustedServerCidrs, trustedProxyCidrs: config.http.trustedProxyCidrs,
-    maxBodyBytes: config.http.maxBodyBytes, rateLimitPerMinute: config.http.rateLimitPerMinute, routes };
+    maxBodyBytes: config.http.maxBodyBytes, rateLimitPerMinute: config.http.rateLimitPerMinute, routes,
+    requestBodyLog: new RequestBodyLog(undefined, 14, (err) => logger.warn('request body log unavailable', { err })) };
   const privateApi = new HttpApi(options);
   // Public routes authenticate with a webhook signature or one-time Agent credentials.
   const publicApi = new HttpApi({ ...publicApiOptions(options), documentation: true });

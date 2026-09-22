@@ -7,7 +7,7 @@ import { CONTEXT_RE } from '../pbx/managedDid.js';
 import { queueChannel } from '../notify/pusher.js';
 import { ConflictError, DependencyUnavailableError } from '../errors.js';
 import type { TakeoverManager } from '../takeover/takeoverManager.js';
-import { matchingContacts, normalizedIp, normalizedMac, registrationMac, usableIp } from './registration.js';
+import { contactAddresses, matchingContacts, normalizedIp, normalizedMac, registrationMac, usableIp } from './registration.js';
 
 export interface DeviceGrant {
   id: string; pbxInstanceId: string; context: string; endpointId: string; appInstanceId: string;
@@ -119,7 +119,7 @@ export function deviceRoutes(o: DeviceAccessOptions): Route[] {
       const now = new Date().toISOString();
       const device: DeviceGrant = { id: randomUUID(), pbxInstanceId: o.pbxInstanceId, context: contact.context, endpointId: contact.endpointId,
         appInstanceId: body.appInstanceId, extension: endpoint.extension, label: endpoint.callerId, mac: mac ?? null, publicIp,
-        localIp: usableIp(contact.localIp)!, deviceModel: body.deviceModel, appVersion: body.appVersion,
+        localIp: localIps.find(ip => contactAddresses(contact).own.includes(ip))!, deviceModel: body.deviceModel, appVersion: body.appVersion,
         attachedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + o.tokenTtlSeconds * 1000).toISOString(), revokedAt: null };
       const token = randomBytes(32).toString('base64url');
       const revoked = await o.store.attach(device, credentialHash(token));

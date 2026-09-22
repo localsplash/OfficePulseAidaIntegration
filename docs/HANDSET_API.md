@@ -1,9 +1,14 @@
 # Handset API
 
 OfficePulse recognizes a handset app from one unexpired Asterisk `ps_contacts`
-registration. It matches the request's public address against the SIP contact URI
-and a normalized app-reported local address against `via_addr`. Loopback and
-link-local addresses are ignored. The trusted proxy policy is unchanged: nginx
+registration. An office's phones share one public address and private ranges repeat
+across offices, so both checks are required. The request's public address must equal
+the contact URI host (the NAT source address when `rewrite_contact` is on), and one
+normalized app-reported local address must equal the phone's own address: `via_addr`
+or Asterisk's `x-ast-orig-host` URI parameter (its address before that rewrite). The URI
+is read as Asterisk realtime stores it (`;` escaped as `^3B`) or unescaped, with or
+without angle brackets, a user part or IPv6 brackets. DNS names are never resolved.
+Loopback and link-local addresses are ignored. The trusted proxy policy is unchanged: nginx
 overwrites X-Forwarded-For and only the configured loopback proxy is trusted.
 `HANDSET_REQUIRE_PUBLIC_IP_MATCH=false` deliberately relaxes only the public-IP
 check for multi-WAN offices. A matching MAC claim is optional; the registration's

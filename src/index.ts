@@ -80,6 +80,18 @@ async function main(): Promise<void> {
   let monitor: AgentMonitor | undefined;
   const takeover = new TakeoverManager({ ari, events: new RuntimeCallEventSink(runtime, logger, livekit, notifier), logger,
     drainTimeoutMs: config.takeover.drainTimeoutMs, defaultRingTimeoutSeconds: config.takeover.ringTimeoutSeconds,
+    announcementTimeoutMs: config.takeover.announcementTimeoutMs,
+    closeScreening: async id => {
+      // Stop monitoring before intentional room closure so it cannot trigger fallback.
+      await monitor?.stop(id);
+      for (let attempt = 0; ; attempt++) {
+        try { await livekit.deleteRoom(`aida-${id}`); return; }
+        catch (error) {
+          if (attempt === 2) throw error;
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      }
+    },
     defaultMohClass: config.takeover.defaultMohClass, livekitTrunkEndpoint: config.takeover.livekitTrunkEndpoint,
     ...(admissions ? { nativeAdmission: {
       validate: async (id: string, linkedId: string | undefined, routeToken: string | undefined) => {

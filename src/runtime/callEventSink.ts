@@ -7,6 +7,7 @@ import { eventStates, handsetState } from './callState.js';
 
 /** Persist first. Optional notification failures must never affect telephone control. */
 export class RuntimeCallEventSink implements CallEventSink {
+  private readonly controls = new Map<string, Promise<void>>();
   constructor(private readonly runtime: RuntimeStore, private readonly logger: Logger,
     private readonly livekit?: LiveKitApi, private readonly notifier?: Notifier) {}
 
@@ -36,14 +37,20 @@ export class RuntimeCallEventSink implements CallEventSink {
         }
       }).catch(() => this.logger.warn('call notification failed', { callSessionId }));
     }
-    if (this.livekit && ['bridged', 'takeover-failed'].includes(event.eventType)) {
-      try {
+    if (this.livekit && ['takeover-requested', 'bridged', 'takeover-failed'].includes(event.eventType)) {
+      // Start control delivery alongside dialing. Preserve each call's command
+      // order so a delayed transfer_requested cannot follow transfer_failed.
+      const deadlineMs = event.payload?.deadlineMs ?? Date.now() + 10_000;
+      const delivery = (this.controls.get(callSessionId) ?? Promise.resolve()).then(async () => {
         const call = await this.runtime.getCallSession(callSessionId);
-        if (call?.roomName) await this.livekit.publishData(call.roomName, 'aida.control', {
+        if (call?.roomName && !call.endedAt) await this.livekit!.publishData(call.roomName, 'aida.control', {
           type: 'control', callId: callSessionId, commandId: event.idempotencyKey,
-          action: event.eventType === 'bridged' ? 'human_answered' : 'transfer_failed', deadlineMs: Date.now() + 10_000,
+          action: event.eventType === 'takeover-requested' ? 'transfer_requested' : event.eventType === 'bridged' ? 'human_answered' : 'transfer_failed',
+          deadlineMs,
         });
-      } catch { this.logger.warn('agent control delivery failed', { callSessionId, eventType: event.eventType }); }
+      }).catch(() => { this.logger.warn('agent control delivery failed', { callSessionId, eventType: event.eventType }); })
+        .finally(() => { if (this.controls.get(callSessionId) === delivery) this.controls.delete(callSessionId); });
+      this.controls.set(callSessionId, delivery);
     }
     return true;
   }

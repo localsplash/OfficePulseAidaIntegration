@@ -243,6 +243,19 @@ test('agent dispatch metadata v2 carries exactly the credential and the routing 
   assert.equal(seen[0]!.restart_policy, 'JRP_NEVER');
 });
 
+test('room deletion uses the LiveKit DeleteRoom API and required roomCreate grant', async () => {
+  let sent: { url: string; body: unknown; video: unknown } | undefined;
+  const client = new LiveKitClient({ url: 'wss://acme.livekit.cloud', apiKey: API_KEY, apiSecret: API_SECRET,
+    agentName: 'aida-prime', timeoutMs: 200, logger: captureLogger().logger,
+    fetchImpl: async (input, init) => {
+      const token = (init?.headers as Record<string, string>).authorization!.slice('Bearer '.length);
+      sent = { url: String(input), body: JSON.parse(String(init?.body)), video: JSON.parse(Buffer.from(token.split('.')[1]!, 'base64url').toString()).video };
+      return new Response('{}');
+    } });
+  await client.deleteRoom('aida-call');
+  assert.deepEqual(sent, { url: 'https://acme.livekit.cloud/twirp/livekit.RoomService/DeleteRoom', body: { room: 'aida-call' }, video: { roomCreate: true } });
+});
+
 test('an effect failure reaches HTTP error handling and a retry can apply the delivery', async () => {
   const { handler, runtime } = makeHandler();
   const body = event();

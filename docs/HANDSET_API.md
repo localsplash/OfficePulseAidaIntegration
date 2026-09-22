@@ -88,7 +88,9 @@ state and tolerate missing, duplicate or reordered alerts.
 
 ## Handset takeover
 
-Only the attached endpoint can be targeted: `Local/<endpointId>@aida-takeover`.
+Only the attached endpoint can be targeted: `Local/<endpointId>@aida-takeover/n`.
+The `/n` keeps the Local channel and its ARI ID alive through the human call;
+otherwise Asterisk optimization can look like a handset hangup.
 Client destination fields are ignored. Staff TAKEOVER remains unavailable (503).
 The command key is SHA-256 of `deviceId:key`; atomic call-version claiming prevents
 double execution. A stale version returns 409 `stale_version`, a running takeover
@@ -104,6 +106,34 @@ handler adds `Call-Info: <sip:127.0.0.1>;answer-after=0`. It adds no Alert-Info.
 Normal queue/internal calls do not invoke this handler. Caller ID is retained.
 Failure keeps Aida with the caller, records busy/rejected/no-answer/failed, and
 sends `transfer_failed`; bridging sends `human_answered` and starts bounded drain.
+
+Alongside immediate dialing, OfficePulse sends server-origin `aida.control` action
+`transfer_requested` with an absolute `deadlineMs`. AidaAgent interrupts its
+current response, disables caller input and speaks the profile `transferStatement`
+once. Control delivery runs independently of dialing, with commands ordered per
+call. `TAKEOVER_ANNOUNCEMENT_TIMEOUT_MS` allows 3000 ms by default (100–10000 ms)
+for speech during ringing. Only MOH waits for this window, so it cannot cover
+the statement. An answering handset joins the caller/Aida bridge immediately
+and hears the outro still playing. Aida takes no new caller turns during handoff.
+
+The drain timer starts as soon as the human is bridged, before control delivery;
+`TAKEOVER_DRAIN_TIMEOUT_MS` defaults to 3000 ms (100–10000 ms). Its deadline is
+also sent to AidaAgent as its post-answer grace deadline. Aida finishes actual
+statement playout before disconnecting, bounded by that deadline, so fast
+auto-answer does not cut off the outro. A completed statement is not replayed;
+if the request control was missed, success starts the statement within the grace
+period. Use brief statements or increase the speech/grace windows as needed.
+A drain ACK or SIP-leg departure may finish cleanup earlier.
+Drain removes the LiveKit leg, stops the monitor and explicitly deletes the
+room, disconnecting any remaining SIP/observer participants. Room deletion is
+retried twice on failure. The caller–handset bridge stays up. An answered handset
+hanging up ends the caller's leg even during drain; busy/rejected/unanswered
+destinations still leave the caller with Aida. Room-finished webhooks update
+LiveKit metadata only; ARI owns telephone completion.
+
+Roll out AidaAgent's graceful `human_answered` handler before the integration
+change. Both services need rebuilding/restarting. Existing explicit drain
+timeout overrides remain in effect; no static dialplan change is required.
 
 GXV3450 provisioning must use its own parameters, not the unrelated `P90`:
 `P2981=1` allows tagged auto-answer and `P2862=3` selects speaker mode. Disable

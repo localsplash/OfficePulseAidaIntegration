@@ -70,6 +70,7 @@ export interface AppConfig {
   takeover: {
     ringTimeoutSeconds: number;
     drainTimeoutMs: number;
+    announcementTimeoutMs: number;
     defaultMohClass: string;
     /** PJSIP endpoint name of the existing LiveKit Cloud SIP trunk. */
     livekitTrunkEndpoint?: string;
@@ -260,7 +261,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       : undefined,
     takeover: {
       ringTimeoutSeconds: int(env, 'TAKEOVER_RING_TIMEOUT_SECONDS', 20, problems, 5, 120),
-      drainTimeoutMs: int(env, 'TAKEOVER_DRAIN_TIMEOUT_MS', 10_000, problems, 100, 10_000),
+      drainTimeoutMs: int(env, 'TAKEOVER_DRAIN_TIMEOUT_MS', 3000, problems, 100, 10_000),
+      announcementTimeoutMs: int(env, 'TAKEOVER_ANNOUNCEMENT_TIMEOUT_MS', 3000, problems, 100, 10_000),
       defaultMohClass: env.TAKEOVER_DEFAULT_MOH_CLASS ?? 'default',
       livekitTrunkEndpoint: optStr(env, 'LIVEKIT_TRUNK_ENDPOINT'),
     },

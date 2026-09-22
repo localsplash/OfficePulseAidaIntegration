@@ -38,6 +38,7 @@ export interface DispatchResult {
 
 export interface LiveKitApi {
   createRoom(roomName: string): Promise<void>;
+  deleteRoom(roomName: string): Promise<void>;
   dispatchAidaPrime(roomName: string, metadata: CallMetadata): Promise<DispatchResult>;
   publishData(roomName: string, topic: string, payload: Record<string, unknown>): Promise<void>;
   listParticipants(roomName: string): Promise<Participant[]>;
@@ -136,6 +137,10 @@ export class LiveKitClient implements LiveKitApi {
       { name: roomName, empty_timeout: this.opts.emptyTimeoutSeconds ?? 300 },
       { roomCreate: true, roomList: true },
     );
+  }
+
+  async deleteRoom(roomName: string): Promise<void> {
+    await this.twirp('RoomService', 'DeleteRoom', { room: roomName }, { roomCreate: true });
   }
 
   async dispatchAidaPrime(roomName: string, metadata: CallMetadata): Promise<DispatchResult> {

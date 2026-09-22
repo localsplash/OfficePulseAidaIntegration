@@ -36,6 +36,7 @@ export class FakeNocoApi implements NocoReadApi {
 
 export class FakeLiveKit implements LiveKitApi {
   rooms: string[] = [];
+  deletedRooms: string[] = [];
   dispatches: Array<{ roomName: string; metadata: CallMetadata }> = [];
   published: Array<{ roomName: string; topic: string; payload: Record<string, unknown> }> = [];
   failCreateRoom = false;
@@ -44,6 +45,10 @@ export class FakeLiveKit implements LiveKitApi {
   async createRoom(roomName: string): Promise<void> {
     if (this.failCreateRoom) throw new Error('livekit createRoom failed');
     this.rooms.push(roomName);
+  }
+
+  async deleteRoom(roomName: string): Promise<void> {
+    this.deletedRooms.push(roomName);
   }
 
   async dispatchAidaPrime(roomName: string, metadata: CallMetadata): Promise<DispatchResult> {

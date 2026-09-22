@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { TakeoverManager, CHANVAR, type TakeoverCommand } from '../src/takeover/takeoverManager.js';
+import { TakeoverManager, CHANVAR, type TakeoverCommand, type TakeoverManagerOptions } from '../src/takeover/takeoverManager.js';
 import { ConflictError, NotFoundError } from '../src/errors.js';
 import { FakeAri, FakeEventSink } from './helpers/fakeAri.js';
 import { captureLogger } from './helpers/capture.js';
@@ -8,7 +8,7 @@ import type { AriChannel } from '../src/ari/types.js';
 
 const CS = 'cs-0001';
 
-function makeManager(drainTimeoutMs = 150): { manager: TakeoverManager; ari: FakeAri; sink: FakeEventSink } {
+function makeManager(drainTimeoutMs = 150, options: Partial<TakeoverManagerOptions> = {}): { manager: TakeoverManager; ari: FakeAri; sink: FakeEventSink } {
   const ari = new FakeAri();
   const sink = new FakeEventSink();
   const { logger } = captureLogger();
@@ -17,9 +17,11 @@ function makeManager(drainTimeoutMs = 150): { manager: TakeoverManager; ari: Fak
     events: sink,
     logger,
     drainTimeoutMs,
+    announcementTimeoutMs: 0,
     defaultRingTimeoutSeconds: 20,
     defaultMohClass: 'default',
     livekitTrunkEndpoint: 'livekit-cloud',
+    ...options,
   });
   return { manager, ari, sink };
 }
@@ -76,7 +78,7 @@ test('takeover happy path: single originate, MOH, answer bridges human, drain re
   assert.equal(ack.status, 'ringing');
   assert.equal(ari.originates.length, 2);
   const humanOriginate = ari.originates[1];
-  assert.equal(humanOriginate?.endpoint, 'Local/100@office-main');
+  assert.equal(humanOriginate?.endpoint, 'Local/100@office-main/n');
   assert.equal(humanOriginate?.timeoutSeconds, 20);
   assert.deepEqual(ari.mohStarts, [{ bridgeId, mohClass: 'default' }]);
 
@@ -177,24 +179,25 @@ for (const [cause, reason] of [
   });
 }
 
-test('human hangup during drain keeps aida with the caller', async () => {
-  const { manager, ari, sink } = makeManager(5_000);
-  const { caller, livekit, bridgeId } = await screenCall(ari);
+test('human hangup during drain ends caller and LiveKit instead of resuming screening', async () => {
+  const closed: string[] = [];
+  const { manager, ari, sink } = makeManager(5_000, { closeScreening: async id => { closed.push(id); } });
+  const { caller, livekit } = await screenCall(ari);
   await manager.takeover(CMD);
   const human = ari.originatedChannels[1] as AriChannel;
   ari.emitStasisStart(['human', CS, 'key-1'], human);
   await tick();
   ari.emitDestroyed(human, 16);
   await tick();
-  const bridge = ari.bridges.get(bridgeId);
-  assert.ok(bridge?.channels.has(caller.id));
-  assert.ok(bridge?.channels.has(livekit.id), 'aida must NOT be drained after the human is gone');
-  assert.equal(ari.hangups.length, 0);
+  assert.ok(ari.hangups.some(h => h.channelId === caller.id));
+  assert.ok(ari.hangups.some(h => h.channelId === livekit.id));
+  assert.deepEqual(closed, [CS]);
+  assert.equal(manager.getSession(CS)?.drainTimer, undefined);
   assert.ok(sink.types().includes('human-hangup'));
-  // Pending drain must not fire later.
-  const before = ari.hangups.length;
-  await manager.acknowledgeDrain(CS).catch(() => {});
-  assert.equal(ari.hangups.length, before);
+  ari.emitDestroyed(caller, 16);
+  await tick();
+  assert.equal(manager.sessionCount(), 0);
+  assert.deepEqual(closed, [CS], 'caller event must not repeat room closure');
 });
 
 test('human hangup after completed drain ends the call', async () => {
@@ -289,7 +292,7 @@ test('handset takeover passes inherited guards, bounded ring time and original c
   await screenCall(ari);
   await manager.takeover({ ...CMD, context: 'aida-takeover', exten: '411', deviceId: 'device-one', ringTimeoutSeconds: 15 });
   const originate = ari.originates[1]!;
-  assert.equal(originate.endpoint, 'Local/411@aida-takeover');
+  assert.equal(originate.endpoint, 'Local/411@aida-takeover/n');
   assert.equal(originate.callerId, '15551230001');
   assert.equal(originate.variables?.__AIDA_TAKEOVER, '1');
   assert.equal(originate.variables?.__AIDA_TAKEOVER_RING_SECONDS, '15');
@@ -329,4 +332,153 @@ test('failed human bridging reports failure and preserves the caller/Aida bridge
   assert.deepEqual(ari.hangups.map(h => h.channelId), [human.id]);
   assert.equal(sink.events.find(e => e.eventType === 'takeover-failed')?.payload?.reason, 'failed');
   assert.ok(!sink.types().includes('bridged'));
+});
+
+test('dialing starts during the announcement; only MOH waits and duplicates do not redial', async () => {
+  const { manager, ari, sink } = makeManager(150, { announcementTimeoutMs: 150 });
+  await screenCall(ari);
+  assert.equal((await manager.takeover(CMD)).status, 'ringing');
+  assert.equal(ari.originates.length, 2);
+  assert.equal(ari.mohStarts.length, 0);
+  assert.equal((await manager.takeover(CMD)).status, 'in-progress');
+  const deadline = sink.events.find(e => e.eventType === 'takeover-requested')?.payload?.deadlineMs;
+  assert.equal(typeof deadline, 'number');
+  assert.ok(Date.now() < Number(deadline), 'dialing must not wait for speech');
+  await tick(180);
+  assert.equal(ari.mohStarts.length, 1);
+  assert.equal(ari.originates.length, 2);
+});
+
+test('caller hangup during the announcement releases the ringing handset and cancels pending MOH', async () => {
+  const closed: string[] = [];
+  const { manager, ari } = makeManager(150, { announcementTimeoutMs: 80, closeScreening: async id => { closed.push(id); } });
+  const { caller } = await screenCall(ari);
+  assert.equal((await manager.takeover(CMD)).status, 'ringing');
+  const humanId = ari.originatedChannels[1]!.id;
+  ari.emitDestroyed(caller, 16);
+  await tick(100);
+  assert.ok(ari.hangups.some(h => h.channelId === humanId));
+  assert.equal(ari.mohStarts.length, 0);
+  assert.deepEqual(closed, [CS]);
+});
+
+test('fast answer joins caller, human and Aida for the graceful drain without starting MOH', async () => {
+  const { manager, ari } = makeManager(150, { announcementTimeoutMs: 80 });
+  const { caller, livekit, bridgeId } = await screenCall(ari);
+  await manager.takeover(CMD);
+  const human = ari.originatedChannels[1]!;
+  ari.emitStasisStart(['human', CS, CMD.idempotencyKey], human);
+  await tick(100);
+  const channels = ari.bridges.get(bridgeId)!.channels;
+  for (const id of [caller.id, livekit.id, human.id]) assert.ok(channels.has(id));
+  assert.equal(ari.mohStarts.length, 0);
+  assert.equal(ari.hangups.length, 0, 'agent speech remains audible after answer');
+  await manager.acknowledgeDrain(CS);
+  assert.ok(!channels.has(livekit.id));
+  assert.ok(channels.has(caller.id));
+  assert.ok(channels.has(human.id));
+});
+
+test('busy response during announcement cancels pending MOH and leaves Aida connected', async () => {
+  const { manager, ari, sink } = makeManager(150, { announcementTimeoutMs: 80 });
+  const { livekit, bridgeId } = await screenCall(ari);
+  await manager.takeover(CMD);
+  ari.emitDestroyed(ari.originatedChannels[1]!, 17);
+  await tick(100);
+  assert.equal(ari.mohStarts.length, 0);
+  assert.equal(ari.hangups.length, 0);
+  assert.ok(ari.bridges.get(bridgeId)?.channels.has(livekit.id));
+  assert.ok(sink.types().includes('takeover-failed'));
+});
+
+test('drain closes the room even if ARI cannot hang up the SIP leg; human bridge stays intact', async () => {
+  const closed: string[] = [];
+  const { manager, ari } = makeManager(30, { closeScreening: async id => { closed.push(id); } });
+  const { caller, livekit, bridgeId } = await screenCall(ari);
+  await manager.takeover(CMD);
+  ari.hangup = async () => { throw new Error('ARI unavailable'); };
+  const human = ari.originatedChannels[1]!;
+  ari.emitStasisStart(['human', CS, CMD.idempotencyKey], human);
+  await tick(80);
+  assert.deepEqual(closed, [CS]);
+  assert.ok(!ari.bridges.get(bridgeId)?.channels.has(livekit.id));
+  assert.ok(ari.bridges.get(bridgeId)?.channels.has(caller.id));
+  assert.ok(ari.bridges.get(bridgeId)?.channels.has(human.id));
+  await manager.acknowledgeDrain(CS);
+  assert.deepEqual(closed, [CS]);
+});
+
+test('drain timer exists before control delivery and ACK can arrive while bridged event is publishing', async () => {
+  const closed: string[] = [];
+  const { manager, ari, sink } = makeManager(50, { closeScreening: async id => { closed.push(id); } });
+  const { livekit } = await screenCall(ari);
+  await manager.takeover(CMD);
+  const original = sink.postCallEvent.bind(sink);
+  sink.postCallEvent = async (id, event) => {
+    if (event.eventType === 'bridged') assert.equal((await manager.acknowledgeDrain(id)).status, 'drained');
+    return original(id, event);
+  };
+  ari.emitStasisStart(['human', CS, CMD.idempotencyKey], ari.originatedChannels[1]!);
+  await tick(100);
+  assert.deepEqual(ari.hangups.map(h => h.channelId), [livekit.id]);
+  assert.deepEqual(closed, [CS]);
+  assert.equal(manager.getSession(CS)?.drainTimer, undefined);
+});
+
+test('room cleanup failure leaves human call intact and can be retried by drain ACK', async () => {
+  let attempts = 0;
+  const { manager, ari } = makeManager(30, { closeScreening: async () => { if (++attempts === 1) throw new Error('offline'); } });
+  const { caller, bridgeId } = await screenCall(ari);
+  await manager.takeover(CMD);
+  const human = ari.originatedChannels[1]!;
+  ari.emitStasisStart(['human', CS, CMD.idempotencyKey], human);
+  await tick(80);
+  assert.equal(attempts, 1);
+  assert.ok(ari.bridges.get(bridgeId)?.channels.has(caller.id));
+  assert.ok(ari.bridges.get(bridgeId)?.channels.has(human.id));
+  await manager.acknowledgeDrain(CS);
+  assert.equal(attempts, 2);
+});
+
+test('reconciliation restores a missed drain deadline for an answered call', async () => {
+  const closed: string[] = [];
+  const { manager, ari } = makeManager(30, { closeScreening: async id => { closed.push(id); } });
+  const bridge = await ari.createBridge('mixing');
+  for (const role of ['caller', 'human', 'livekit']) {
+    const channel = ari.makeChannel(role, 'Up');
+    ari.setVar(role, CHANVAR.callSessionId, CS);
+    ari.setVar(role, CHANVAR.role, role);
+    await ari.addToBridge(bridge.id, channel.id);
+  }
+  await manager.reconcile();
+  await tick(80);
+  assert.deepEqual(closed, [CS]);
+  assert.deepEqual(ari.hangups.map(h => h.channelId), ['livekit']);
+  assert.ok(ari.bridges.get(bridge.id)?.channels.has('caller'));
+  assert.ok(ari.bridges.get(bridge.id)?.channels.has('human'));
+});
+
+test('hangup during answer event delivery cancels drain and cannot later publish a successful bridge', async () => {
+  const closed: string[] = [];
+  const { manager, ari, sink } = makeManager(100, { closeScreening: async id => { closed.push(id); } });
+  const { caller } = await screenCall(ari);
+  await manager.takeover(CMD);
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const post = sink.postCallEvent.bind(sink);
+  sink.postCallEvent = async (id, event) => {
+    if (event.eventType === 'answered') await gate;
+    return post(id, event);
+  };
+  const human = ari.originatedChannels[1]!;
+  ari.emitStasisStart(['human', CS, CMD.idempotencyKey], human);
+  await tick();
+  ari.emitDestroyed(human, 16);
+  await tick();
+  release();
+  await tick(150);
+  assert.ok(ari.hangups.some(h => h.channelId === caller.id));
+  assert.deepEqual(closed, [CS]);
+  assert.ok(!sink.types().includes('bridged'));
+  assert.equal(manager.getSession(CS)?.drainTimer, undefined);
 });

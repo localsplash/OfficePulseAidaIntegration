@@ -47,7 +47,11 @@ interface CallSession {
   humanChannelId?: string;
   humanAnswered: boolean;
   mohActive: boolean;
+  mohTimer?: NodeJS.Timeout;
   drainTimer?: NodeJS.Timeout;
+  ending?: boolean;
+  screeningClosed?: boolean;
+  screeningCleanup?: Promise<void>;
   activeCommandKey?: string;
   completedCommands: Map<string, TakeoverAck>;
   eventSeq: number;
@@ -62,6 +66,10 @@ export interface TakeoverManagerOptions {
   events: CallEventSink;
   logger: Logger;
   drainTimeoutMs: number;
+  /** Announcement window while dialing; MOH waits, the originate does not. */
+  announcementTimeoutMs?: number;
+  /** Disconnect the monitor and delete this call's LiveKit room; never the telephone bridge. */
+  closeScreening?: (callSessionId: string) => Promise<void>;
   defaultRingTimeoutSeconds: number;
   defaultMohClass: string;
   /** PJSIP endpoint name of the existing LiveKit Cloud SIP trunk. */
@@ -255,7 +263,7 @@ export class TakeoverManager {
    */
   async takeover(cmd: TakeoverCommand): Promise<TakeoverAck> {
     const session = this.sessions.get(cmd.callSessionId);
-    if (!session || !session.callerChannelId || !session.bridgeId) {
+    if (!session || session.ending || !session.callerChannelId || !session.bridgeId) {
       throw new NotFoundError(`no active screened call for session ${cmd.callSessionId}`);
     }
 
@@ -272,8 +280,12 @@ export class TakeoverManager {
     session.activeCommandKey = cmd.idempotencyKey;
     session.ringingReported = false;
     const log = this.log(session);
-    await this.emitEvent(session, 'takeover-requested', { destinationType: cmd.destinationType, ...(cmd.deviceId ? { deviceId: cmd.deviceId, endpointId: cmd.exten } : {}) });
-    if (!this.sessions.has(cmd.callSessionId) || session.fellBack || session.fallbackInProgress) return { status: 'failed' };
+    const announcementDeadline = Date.now() + (this.opts.announcementTimeoutMs ?? 3000);
+    await this.emitEvent(session, 'takeover-requested', { destinationType: cmd.destinationType, deadlineMs: announcementDeadline,
+      ...(cmd.deviceId ? { deviceId: cmd.deviceId, endpointId: cmd.exten } : {}) });
+    // Dial immediately while the agent announces. The answered handset joins
+    // the same bridge and hears the outro still in progress.
+    if (!this.sessions.has(cmd.callSessionId) || session.ending || session.fellBack || session.fallbackInProgress) return { status: 'failed' };
     // Busy/auto-answer events can precede the REST response. Correlate before dialing.
     const humanId = randomUUID();
     session.humanChannelId = humanId;
@@ -281,7 +293,9 @@ export class TakeoverManager {
     try {
       const human = await this.opts.ari.originate({
         channelId: humanId,
-        endpoint: `Local/${cmd.exten}@${cmd.context}`,
+        // ARI retains this ID for drain and hangup handling. Optimization would
+        // destroy it as soon as media flows and replace it with the PJSIP leg.
+        endpoint: `Local/${cmd.exten}@${cmd.context}/n`,
         appArgs: `human,${cmd.callSessionId},${cmd.idempotencyKey}`,
         callerId: session.callerNumber,
         timeoutSeconds: cmd.ringTimeoutSeconds ?? this.opts.defaultRingTimeoutSeconds,
@@ -295,7 +309,7 @@ export class TakeoverManager {
           } : {}),
         },
       });
-      if (!this.sessions.has(cmd.callSessionId) || session.fellBack || session.fallbackInProgress) {
+      if (!this.sessions.has(cmd.callSessionId) || session.ending || session.fellBack || session.fallbackInProgress) {
         await this.safeAri(() => this.opts.ari.hangup(human.id));
         return { status: 'failed' };
       }
@@ -311,13 +325,21 @@ export class TakeoverManager {
       throw err;
     }
 
-    // Hold treatment while the destination rings; organization-selectable
-    // MOH class comes with the command (from ring group / DID route).
+    // Only MOH waits for the announcement window, so it cannot mask the outro.
     const mohClass = cmd.musicOnHoldClass ?? this.opts.defaultMohClass;
-    if (!session.humanAnswered) {
+    const startMoh = async () => {
+      if (session.humanAnswered || session.ending || session.humanChannelId !== humanId || session.fellBack) return;
       session.mohActive = true;
       await this.safeAri(() => this.opts.ari.startBridgeMoh(session.bridgeId as string, mohClass));
-      if (session.humanAnswered || !this.sessions.has(cmd.callSessionId)) await this.stopMoh(session);
+      if (session.humanAnswered || session.ending || session.humanChannelId !== humanId || !this.sessions.has(cmd.callSessionId)) await this.stopMoh(session);
+    };
+    if (!session.humanAnswered) {
+      const remaining = announcementDeadline - Date.now();
+      if (remaining > 0) session.mohTimer = setTimeout(() => {
+        session.mohTimer = undefined;
+        void startMoh();
+      }, remaining);
+      else await startMoh();
     }
 
     log.info('takeover originated', { destinationType: cmd.destinationType });
@@ -327,7 +349,7 @@ export class TakeoverManager {
   /** Human leg answered: bridge immediately, then drain Aida. */
   private async onHumanAnswered(callSessionId: string, ev: StasisStartEvent): Promise<void> {
     const session = this.sessions.get(callSessionId);
-    if (!session?.bridgeId) {
+    if (!session?.bridgeId || session.ending) {
       // Caller vanished while the destination was ringing — nothing to
       // connect the human to; release the leg.
       await this.safeAri(() => this.opts.ari.hangup(ev.channel.id));
@@ -343,6 +365,7 @@ export class TakeoverManager {
     // Hold treatment stops the moment the human answers so it cannot
     // leak into the bridged conversation.
     await this.stopMoh(session);
+    if (session.ending || session.humanChannelId !== ev.channel.id) return;
     try { await this.opts.ari.addToBridge(session.bridgeId, ev.channel.id); }
     catch {
       session.humanAnswered = false;
@@ -356,6 +379,7 @@ export class TakeoverManager {
       log.warn('human bridge failed; keeping aida with caller');
       return;
     }
+    if (session.ending || session.humanChannelId !== ev.channel.id) return;
     log.info('human answered and bridged');
 
     const key = session.activeCommandKey ?? ev.args[2];
@@ -363,15 +387,21 @@ export class TakeoverManager {
       session.completedCommands.set(key, { status: 'answered' });
       session.activeCommandKey = undefined;
     }
+    // Arm before publishing: a fast ACK or slow control delivery cannot lose
+    // the drain deadline. Aida can finish the outro with both parties bridged.
+    const deadlineMs = this.startDrain(session);
     await this.emitEvent(session, 'answered');
-    await this.emitEvent(session, 'bridged');
+    if (!session.ending) await this.emitEvent(session, 'bridged', { deadlineMs });
+  }
 
-    // Local bounded drain: Aida gets at most drainTimeoutMs to wrap up;
-    // A drain-ack command can complete it earlier.
+  private startDrain(session: CallSession): number {
+    if (session.drainTimer) clearTimeout(session.drainTimer);
+    const deadlineMs = Date.now() + this.opts.drainTimeoutMs;
     session.drainTimer = setTimeout(() => {
       session.drainTimer = undefined;
       void this.removeAida(session, 'drain-deadline');
     }, this.opts.drainTimeoutMs);
+    return deadlineMs;
   }
 
   /** The drain was acknowledged — remove Aida now. */
@@ -384,6 +414,7 @@ export class TakeoverManager {
       await this.removeAida(session, 'drain-ack');
       return { status: 'drained' };
     }
+    if (session.humanAnswered && !session.livekitChannelId) await this.closeScreening(session);
     return { status: session.livekitChannelId ? 'not-draining' : 'already-drained' };
   }
 
@@ -397,15 +428,35 @@ export class TakeoverManager {
       return;
     }
     const livekitId = session.livekitChannelId;
-    if (!livekitId) return;
-    session.livekitChannelId = undefined;
-    if (session.bridgeId) {
-      await this.safeAri(() => this.opts.ari.removeFromBridge(session.bridgeId as string, livekitId));
+    if (livekitId) {
+      session.livekitChannelId = undefined;
+      this.channelToSession.delete(livekitId);
+      if (session.bridgeId) {
+        await this.safeAri(() => this.opts.ari.removeFromBridge(session.bridgeId as string, livekitId));
+      }
+      await this.safeAri(() => this.opts.ari.hangup(livekitId));
     }
-    await this.safeAri(() => this.opts.ari.hangup(livekitId));
-    this.channelToSession.delete(livekitId);
+    // Empty-room expiry cannot reap a room containing an orphan SIP leg.
+    // DeleteRoom is also a backstop if the ARI leg was already lost.
+    await this.closeScreening(session);
+    if (session.ending) return;
     this.log(session).info('aida drained', { reason });
     await this.emitEvent(session, 'aida-drained', { reason });
+  }
+
+  private async closeScreening(session: CallSession): Promise<void> {
+    if (session.screeningClosed) return;
+    if (session.screeningCleanup) return session.screeningCleanup;
+    session.screeningCleanup = (async () => {
+      try {
+        await this.opts.closeScreening?.(session.callSessionId);
+        session.screeningClosed = true;
+      } catch {
+        this.log(session).warn('screening room cleanup failed');
+      }
+    })();
+    try { await session.screeningCleanup; }
+    finally { session.screeningCleanup = undefined; }
   }
 
   // ----------------------------------------------------------------- events
@@ -438,7 +489,12 @@ export class TakeoverManager {
     }
     if (ev.channel.id === session.livekitChannelId) {
       session.livekitChannelId = undefined;
-      if (!session.humanAnswered && !session.fellBack) {
+      if (session.humanAnswered) {
+        if (session.drainTimer) clearTimeout(session.drainTimer);
+        session.drainTimer = undefined;
+        await this.removeAida(session, 'livekit-leg-ended');
+      }
+      if (!session.humanAnswered && !session.ending && !session.fellBack) {
         // Aida died mid-screening with no takeover done. The event is
         // recorded so an operator or handset can command a takeover. The
         // caller stays up (dialplan fallback only covers pre-Stasis).
@@ -472,24 +528,26 @@ export class TakeoverManager {
 
     session.humanChannelId = undefined;
     session.humanAnswered = false;
+    session.ending = true;
+    const during = session.drainTimer ? 'drain' : 'bridged';
     if (session.drainTimer) {
-      // Human hung up during the drain window: cancel the drain and keep
-      // Aida bridged so the caller is never stranded.
       clearTimeout(session.drainTimer);
       session.drainTimer = undefined;
-      log.warn('human hung up during drain; keeping aida with caller');
-      await this.emitEvent(session, 'human-hangup', { during: 'drain' });
-      return;
     }
-    // Takeover was complete (Aida already gone): human hangup ends the call.
+    // An answered handset owns the call, including during the drain window.
+    // Hang up first: event storage or room cleanup must not keep the caller up.
     log.info('human hung up after takeover; ending call');
-    await this.emitEvent(session, 'human-hangup', { during: 'bridged' });
     if (session.callerChannelId) {
       await this.safeAri(() => this.opts.ari.hangup(session.callerChannelId as string));
     }
+    if (session.livekitChannelId) await this.safeAri(() => this.opts.ari.hangup(session.livekitChannelId!));
+    await this.closeScreening(session);
+    await this.emitEvent(session, 'human-hangup', { during });
   }
 
   private async onCallerGone(session: CallSession): Promise<void> {
+    session.ending = true;
+    await this.stopMoh(session);
     this.log(session).info('caller hung up');
     if (session.drainTimer) {
       clearTimeout(session.drainTimer);
@@ -501,6 +559,7 @@ export class TakeoverManager {
         this.channelToSession.delete(legId);
       }
     }
+    await this.closeScreening(session);
     await this.emitEvent(session, 'hangup');
     await this.opts.nativeAdmission?.ended(session.callSessionId).catch(() => {});
     this.cleanupSession(session);
@@ -511,7 +570,7 @@ export class TakeoverManager {
     const session = this.sessions.get(callSessionId);
     if (!session?.callerChannelId || !session.callerEntered) return; // pre-Stasis failure is handled by the PBX wrapper
     if (session.fallbackWork) return session.fallbackWork;
-    if (session.humanAnswered || session.fellBack) return;
+    if (session.humanAnswered || session.ending || session.fellBack) return;
     session.fallbackInProgress = true;
     const callerId = session.callerChannelId;
     const work = (async () => {
@@ -519,6 +578,7 @@ export class TakeoverManager {
         const target = session.fallbackTarget ?? (this.opts.nativeAdmission ? await this.opts.nativeAdmission.fallbackTarget(callSessionId) : { context: 'aida-post-bootstrap', exten: 's' });
         if (!target) throw new Error('native fallback unavailable');
         const ari = this.opts.ari;
+        await this.stopMoh(session);
         await ari.setChannelVar(callerId, 'AIDA_DISPOSITION', 'FALLBACK');
         if (session.bridgeId) await ari.removeFromBridge(session.bridgeId, callerId);
         await ari.continueInDialplan(callerId, target.context, target.exten);
@@ -528,6 +588,7 @@ export class TakeoverManager {
           if (id) { this.channelToSession.delete(id); await this.safeAri(() => ari.hangup(id)); }
         }
         session.livekitChannelId = undefined; session.humanChannelId = undefined;
+        await this.closeScreening(session);
         await this.emitEvent(session, 'pbx-fallback');
       } finally { session.fallbackInProgress = false; session.fallbackWork = undefined; }
     })();
@@ -537,6 +598,7 @@ export class TakeoverManager {
 
   private cleanupSession(session: CallSession): void {
     if (session.drainTimer) clearTimeout(session.drainTimer);
+    if (session.mohTimer) clearTimeout(session.mohTimer);
     for (const id of [session.callerChannelId, session.livekitChannelId, session.humanChannelId]) {
       if (id) this.channelToSession.delete(id);
     }
@@ -544,6 +606,10 @@ export class TakeoverManager {
   }
 
   private async stopMoh(session: CallSession): Promise<void> {
+    if (session.mohTimer) {
+      clearTimeout(session.mohTimer);
+      session.mohTimer = undefined;
+    }
     if (!session.mohActive || !session.bridgeId) return;
     session.mohActive = false;
     await this.safeAri(() => this.opts.ari.stopBridgeMoh(session.bridgeId as string));
@@ -588,6 +654,10 @@ export class TakeoverManager {
           if (session) session.bridgeId = bridge.id;
         }
       }
+    }
+    // A reconnect must not strand LiveKit alongside an established human call.
+    for (const session of this.sessions.values()) {
+      if (session.humanAnswered && session.livekitChannelId && !session.drainTimer) this.startDrain(session);
     }
     if (this.opts.nativeAdmission) for (const session of this.sessions.values()) {
       if (!session.humanAnswered) {

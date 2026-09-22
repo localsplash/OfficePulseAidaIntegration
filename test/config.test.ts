@@ -49,7 +49,8 @@ test('development config loads with defaults', () => {
   const config = loadConfig({ NODE_ENV: 'development' });
   assert.equal(config.fastAgi.port, 4573);
   assert.equal(config.http.port, 8085);
-  assert.equal(config.takeover.drainTimeoutMs, 10_000);
+  assert.equal(config.takeover.drainTimeoutMs, 3000);
+  assert.equal(config.takeover.announcementTimeoutMs, 3000);
 });
 
 test('production requires credentials and non-empty CIDR allowlist', () => {

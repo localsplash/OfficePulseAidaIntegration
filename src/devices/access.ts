@@ -7,7 +7,7 @@ import { CONTEXT_RE } from '../pbx/managedDid.js';
 import { queueChannel } from '../notify/pusher.js';
 import { ConflictError, DependencyUnavailableError } from '../errors.js';
 import type { TakeoverManager } from '../takeover/takeoverManager.js';
-import { matchingContacts, normalizedIp, normalizedMac, registrationMac, usableIp } from './registration.js';
+import { contactAddresses, matchingContacts, normalizedIp, normalizedMac, registrationMac, usableIp } from './registration.js';
 
 export interface DeviceGrant {
   id: string; pbxInstanceId: string; context: string; endpointId: string; appInstanceId: string;
@@ -97,7 +97,7 @@ export function deviceRoutes(o: DeviceAccessOptions): Route[] {
   };
   const revoke = async (id: string) => { await o.store.revokeDevice(id); await o.removeFromRooms(id); };
   return [
-    { method: 'POST', pattern: '/v1/handset/attach', trusted: false, handler: async req => {
+    { method: 'POST', pattern: '/v1/handset/attach', trusted: false, logRequestBody: true, handler: async req => {
       const body = object(req.body);
       if (typeof body.appInstanceId !== 'string' || !/^[A-Za-z0-9_.-]{1,128}$/.test(body.appInstanceId) ||
         !Array.isArray(body.localIps) || body.localIps.length > 32 || body.localIps.some(ip => typeof ip !== 'string' || ip.length > 80) ||
@@ -119,24 +119,24 @@ export function deviceRoutes(o: DeviceAccessOptions): Route[] {
       const now = new Date().toISOString();
       const device: DeviceGrant = { id: randomUUID(), pbxInstanceId: o.pbxInstanceId, context: contact.context, endpointId: contact.endpointId,
         appInstanceId: body.appInstanceId, extension: endpoint.extension, label: endpoint.callerId, mac: mac ?? null, publicIp,
-        localIp: usableIp(contact.localIp)!, deviceModel: body.deviceModel, appVersion: body.appVersion,
+        localIp: localIps.find(ip => contactAddresses(contact).own.includes(ip))!, deviceModel: body.deviceModel, appVersion: body.appVersion,
         attachedAt: now, lastSeenAt: now, expiresAt: new Date(Date.now() + o.tokenTtlSeconds * 1000).toISOString(), revokedAt: null };
       const token = randomBytes(32).toString('base64url');
       const revoked = await o.store.attach(device, credentialHash(token));
       await Promise.all(revoked.map(id => o.removeFromRooms(id)));
       return { status: 200, body: { token, expiresAt: device.expiresAt, device: deviceDto(device) } };
     } },
-    { method: 'GET', pattern: '/v1/handset/me', trusted: false, handler: async req => {
+    { method: 'GET', pattern: '/v1/handset/me', trusted: false, logRequestBody: true, handler: async req => {
       const device = await authorized(req);
       return { status: 200, body: { device: deviceDto(device), queues: (await o.directory.queues(device)).map(name => ({ name, channel: queueChannel(device.pbxInstanceId, device.context, name) })), pusher: o.pusher ?? null } };
     } },
-    { method: 'GET', pattern: '/v1/handset/calls', trusted: false, handler: async req => {
+    { method: 'GET', pattern: '/v1/handset/calls', trusted: false, logRequestBody: true, handler: async req => {
       const device = await authorized(req); const calls = await o.store.listCalls(device, await o.directory.queues(device));
       const visible = [];
       for (const call of calls) if ((screening(call.state) || call.state === 'ringing') && await o.directory.allows(device, call)) visible.push(callDto(call));
       return { status: 200, body: { calls: visible } };
     } },
-    { method: 'GET', pattern: '/v1/handset/calls/:callSessionId', trusted: false, handler: async req => {
+    { method: 'GET', pattern: '/v1/handset/calls/:callSessionId', trusted: false, logRequestBody: true, handler: async req => {
       const { device, call } = await scoped(req);
       const events = await o.runtime.listCallEvents(call.id);
       const latest = [...events].reverse().find(e => ['takeover-requested', 'takeover-failed', 'bridged'].includes(e.eventType));
@@ -151,7 +151,7 @@ export function deviceRoutes(o: DeviceAccessOptions): Route[] {
             canSubscribe: false, canPublish: false, canPublishData: false, canUpdateOwnMetadata: false },
         }) } } : {}) } };
     } },
-    { method: 'POST', pattern: '/v1/handset/calls/:callSessionId/takeover', trusted: false, handler: async req => {
+    { method: 'POST', pattern: '/v1/handset/calls/:callSessionId/takeover', trusted: false, logRequestBody: true, handler: async req => {
       const { device, call } = await scoped(req); const body = object(req.body);
       if (typeof body.idempotencyKey !== 'string' || !body.idempotencyKey || body.idempotencyKey.length > 200 ||
         !Number.isSafeInteger(body.expectedCallVersion) || Number(body.expectedCallVersion) < 1) failure(400, 'invalid_takeover');
@@ -175,7 +175,7 @@ export function deviceRoutes(o: DeviceAccessOptions): Route[] {
         await o.runtime.completeControlCommand(call.id, key, 'failed', { error: (error as Error).message }); throw error;
       }
     } },
-    { method: 'POST', pattern: '/v1/handset/logout', trusted: false, handler: async req => {
+    { method: 'POST', pattern: '/v1/handset/logout', trusted: false, logRequestBody: true, handler: async req => {
       await revoke((await authorized(req)).id); return { status: 200, body: { status: 'revoked' } };
     } },
     { method: 'GET', pattern: '/v1/admin/handsets', operationsAccess: { scope: 'context-query', query: 'context' }, handler: async req => {

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { credentialHash } from '../src/devices/access.js';
-import { normalizedIp } from '../src/devices/registration.js';
+import { contactAddresses, normalizedIp } from '../src/devices/registration.js';
 import { handsetFixture } from './helpers/handset.js';
 import { HttpApi, publicApiOptions } from '../src/http/httpServer.js';
 import { Readiness } from '../src/readiness.js';
@@ -48,6 +48,48 @@ test('normalizes addresses, ignores loopback/link-local, and supports deliberate
     const g = handsetFixture(); g.state.contacts[0]!.localIp = ip;
     assert.equal((await g.invoke('/v1/handset/attach', { ...g.attachBody, localIps: [ip] }, undefined, 'POST')).status, 403);
   }
+});
+
+test('contact addresses tolerate realtime escaping and other stored URI forms', () => {
+  const cases: [string, string, { source?: string; own: string[] }][] = [
+    // Asterisk realtime escapes ';' as ^3B; rewrite_contact keeps the phone's own address in x-ast-orig-host.
+    ['sip:411@172.116.149.216:44382^3Btransport=TLS^3Bx-ast-orig-host=192.168.6.97:5060', '192.168.6.97', { source: '172.116.149.216', own: ['192.168.6.97'] }],
+    ['sip:411@203.0.113.1:5061;transport=TLS;x-ast-orig-host=192.168.1.10:5060', '', { source: '203.0.113.1', own: ['192.168.1.10'] }],
+    ['"Desk" <SIPS:411@203.0.113.1:5061;transport=TLS;X-AST-ORIG-HOST=[fd00::10]:5060>', '192.168.1.10', { source: '203.0.113.1', own: ['192.168.1.10', 'fd00::10'] }],
+    ['sip:203.0.113.1:5060^3Bob', '192.168.1.10', { source: '203.0.113.1', own: ['192.168.1.10'] }],
+    ['sip:411@[2001:db8::1]:5060^3Btransport=UDP', '', { source: '2001:db8::1', own: [] }],
+    // DNS names are never resolved, and loopback/link-local addresses never count.
+    ['sip:411@pbx.example.com:5060;x-ast-orig-host=127.0.0.1:5060', 'fe80::1', { source: undefined, own: [] }],
+  ];
+  for (const [uri, localIp, expected] of cases) assert.deepEqual(contactAddresses({ uri, localIp }), expected, uri);
+});
+
+test('phones behind one public IP are told apart by local IP, and the public IP must be the NAT source', async () => {
+  const f = handsetFixture();
+  f.state.endpoints.push({ ...f.state.endpoints[0]!, id: '412', extension: '412' });
+  f.state.contacts.push({ ...f.state.contacts[0]!, endpointId: '412', localIp: '192.168.1.11', userAgent: 'Phone/MAC-000000000002' });
+  const attach = (localIps: string[], publicIp = '203.0.113.1') =>
+    f.invoke('/v1/handset/attach', { ...f.attachBody, appInstanceId: `install-${localIps[0]}`, localIps }, undefined, 'POST', '', publicIp);
+  assert.equal(((await attach(['192.168.1.11'])).body as any).device.endpointId, '412');
+  assert.equal(((await attach(['192.168.1.10'])).body as any).device.endpointId, '411');
+  // The shared public address is no phone's own address, so claiming it as local identifies nothing.
+  assert.equal((await attach(['203.0.113.1'])).status, 403);
+  // Private ranges repeat across offices: a source equal to a phone's private address is not its office.
+  assert.equal((await attach(['203.0.113.1'], '192.168.1.10')).status, 403);
+});
+
+test('attach matches the realtime-escaped contact Asterisk stores, including a phone known only by x-ast-orig-host', async () => {
+  const f = handsetFixture();
+  Object.assign(f.state.contacts[0]!, { uri: 'sip:411@172.116.149.216:44382^3Btransport=TLS^3Bx-ast-orig-host=192.168.6.97:5060', localIp: '192.168.6.97' });
+  const body = { ...f.attachBody, localIps: ['192.168.6.97'] };
+  const attached = await f.invoke('/v1/handset/attach', body, undefined, 'POST', '', '172.116.149.216');
+  assert.equal(attached.status, 200);
+  assert.equal((await f.invoke(detail, undefined, (attached.body as any).token)).status, 200);
+  assert.equal((await f.invoke('/v1/handset/attach', body, undefined, 'POST', '', '172.116.149.217')).status, 403);
+  f.state.contacts[0]!.localIp = '';
+  const viaOrigHost = await f.invoke('/v1/handset/attach', body, undefined, 'POST', '', '172.116.149.216');
+  assert.equal(viaOrigHost.status, 200);
+  assert.equal((await f.store.getDevice((viaOrigHost.body as any).device.id))?.localIp, '192.168.6.97');
 });
 
 test('replacement and logout revoke capabilities; a phone may attach after admin revoke', async () => {

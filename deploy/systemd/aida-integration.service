@@ -21,6 +21,9 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
+# Handset request body log; the service deletes day files older than 14 days.
+LogsDirectory=officepulse-aida-integration
+LogsDirectoryMode=0750
 ProtectKernelTunables=true
 ProtectControlGroups=true
 # AF_NETLINK is required: libwebrtc (@livekit/rtc-node) enumerates network

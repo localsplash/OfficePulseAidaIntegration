@@ -7,6 +7,7 @@ import { RateLimiter } from './rateLimit.js';
 import { ipInCidrs, resolveClientIp } from '../net/cidr.js';
 import { ConfigError, ValidationError } from '../errors.js';
 import { serveDocumentation } from './documentation.js';
+import type { RequestBodyLog } from '../logging/requestBodyLog.js';
 
 export interface ApiRequest {
   method: string;
@@ -44,6 +45,8 @@ export interface Route {
   trusted?: boolean;
   /** Hands the handler the unparsed body, required to verify a signature. */
   rawBody?: boolean;
+  /** Records the request body and outcome in the request body log. Only for bodies without credentials. */
+  logRequestBody?: boolean;
   /**
    * Explicitly exposes this private Admin route through the authenticated
    * Operations browser gateway. Future routes stay server-only until their
@@ -71,6 +74,7 @@ export interface HttpApiOptions {
   maxBodyBytes: number;
   rateLimitPerMinute: number;
   routes: Route[];
+  requestBodyLog?: Pick<RequestBodyLog, 'write'>;
   now?: () => number;
 }
 
@@ -184,6 +188,7 @@ export class HttpApi {
     const path = url.pathname;
     const method = (req.method ?? 'GET').toUpperCase();
     const log = this.opts.logger.child({ correlationId, method, path });
+    let recordBody: ((status: number, error?: string) => void) | undefined;
 
     try {
       if (this.opts.documentation && method === 'GET' && await serveDocumentation(path, res)) return;
@@ -229,6 +234,12 @@ export class HttpApi {
           params[name] = decodeURIComponent(match[i + 1] ?? '');
         });
         const raw = await this.readRawBody(req);
+        if (route.logRequestBody && this.opts.requestBodyLog) {
+          const bodyLog = this.opts.requestBodyLog;
+          const header = (name: string) => (typeof req.headers[name] === 'string' ? req.headers[name] : undefined);
+          recordBody = (status, error) => void bodyLog.write({ correlationId, method, path, clientIp,
+            userAgent: header('user-agent'), contentType: header('content-type'), raw, status, error });
+        }
         const out = await route.handler({
           method,
           path,
@@ -241,6 +252,8 @@ export class HttpApi {
           correlationId,
         });
         this.send(res, out.status, out.body, correlationId);
+        const error = out.status >= 400 ? (out.body as { error?: unknown } | undefined)?.error : undefined;
+        recordBody?.(out.status, typeof error === 'string' ? error : undefined);
         return;
       }
 
@@ -253,6 +266,7 @@ export class HttpApi {
       } else {
         log.warn('request rejected', { err, status });
       }
+      recordBody?.(status, message);
       if (err instanceof ConfigError) {
         this.send(res, 500, { error: 'configuration error' }, correlationId);
         return;

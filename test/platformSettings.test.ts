@@ -110,3 +110,16 @@ test('shared environment and central instance resolve with a deliberate multi-PB
   const host = await resolvePlatformSettings({ OFFICEPULSE_INSTANCE_ID: 'officepulse2-dev' }, api(rows));
   assert.equal(host.OFFICEPULSE_INSTANCE_ID, 'officepulse2-dev'); assert.equal(host.ENVIRONMENT_NAME, 'dev');
 });
+
+
+test('canonical database credentials stay in officepulse scope and passwords remain literal', async () => {
+  const result = await resolvePlatformSettings({}, api([
+    setting('*', 'DB_USER', 'global-writer'), setting('aida', 'DB_PASSWORD', 'shared-password'),
+    setting('officepulse', 'DB_HOST', 'db.test'), setting('officepulse', 'DB_NAME', 'aidacalls_db'),
+    setting('officepulse', 'DB_USER', 'aida_runtime'), setting('officepulse', 'DB_PASSWORD', " raw@%:/\n"),
+  ]));
+  assert.equal(result.DB_USER, 'aida_runtime');
+  assert.equal(result.DB_PASSWORD, " raw@%:/\n");
+  const empty = await resolvePlatformSettings({}, api([setting('*', 'DB_USER', 'not-mine')]));
+  assert.equal(empty.DB_USER, undefined);
+});

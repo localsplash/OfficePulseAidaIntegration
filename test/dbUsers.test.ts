@@ -13,10 +13,10 @@ import { migrateRuntime } from '../src/runtime/migrate.js';
 const exec = promisify(execFile);
 const script = fileURLToPath(new URL('../scripts/db-users.sh', import.meta.url));
 const sample: NodeJS.ProcessEnv = {
-  RUNTIME_MYSQL_HOST: 'db.example.test', RUNTIME_MYSQL_PORT: '3306',
-  RUNTIME_MYSQL_DATABASE: 'aida_grants_test', RUNTIME_MYSQL_USER: 'runtime_user',
-  RUNTIME_MYSQL_PASSWORD: "runtime'\\secret", MYSQL_ADMIN_USER: 'admin', MYSQL_ADMIN_PASSWORD: 'admin-secret',
-  OFFICEPULSE_RUNTIME_DATABASE_URL: 'mysql://reader%5Fuser:quote%27%5C%24%28not-a-command%29%0A@reader-host/aida_grants_test',
+  DB_HOST: 'db.example.test', DB_PORT: '3306',
+  DB_NAME: 'aida_grants_test', DB_USER: 'runtime_user',
+  DB_PASSWORD: "runtime'\\secret", MYSQL_ADMIN_USER: 'admin', MYSQL_ADMIN_PASSWORD: 'admin-secret',
+  READER_DB_USER: 'reader_user', READER_DB_NAME: 'aida_grants_test', READER_DB_PASSWORD: "quote'\\$(not-a-command)\n",
 };
 
 test('DB provisioning sends escaped secrets through stdin, uses the existing inputs and narrows grants', async t => {
@@ -31,7 +31,7 @@ process.stdin.on('end', async () => {
   await writeFile(process.env.CAPTURE_MYSQL, JSON.stringify({ sql, args: process.argv.slice(2), password: process.env.MYSQL_PWD }));
 });\n`, { mode: 0o700 });
   const env = { ...process.env, ...sample, PATH: `${root}:${process.env.PATH}`, CAPTURE_MYSQL: capture,
-    DB_HOST: 'operator-tunnel', DB_PORT: '13306' };
+    MYSQL_ADMIN_HOST: 'operator-tunnel', MYSQL_ADMIN_PORT: '13306' };
   const result = await exec('bash', [script], { env });
   const recorded = JSON.parse(await readFile(capture, 'utf8'));
   assert.ok(recorded.args.includes('--host=operator-tunnel'));
@@ -49,14 +49,14 @@ process.stdin.on('end', async () => {
   assert.doesNotMatch(result.stdout + result.stderr, /secret|quote|not-a-command/);
 
   for (const change of [
-    { RUNTIME_MYSQL_USER: 'bad-name' }, { RUNTIME_MYSQL_USER: 'reader_user' },
-    { RUNTIME_MYSQL_USER: 'admin' }, { RUNTIME_MYSQL_DATABASE: 'asterisk' },
-    { RUNTIME_MYSQL_DATABASE: 'aida_%_test' }, { RUNTIME_MYSQL_PASSWORD: '' },
-    { MYSQL_ADMIN_PASSWORD: '' }, { DB_PORT: '0' }, { DB_PORT: '65536' },
-    { OFFICEPULSE_RUNTIME_DATABASE_URL: 'mysql://reader:secret@db/other' },
-    { OFFICEPULSE_RUNTIME_DATABASE_URL: 'mysql://reader:%GG@db/aida_grants_test' },
-    { OFFICEPULSE_RUNTIME_DATABASE_URL: 'mysql://reader:%00@db/aida_grants_test' },
-    { OFFICEPULSE_RUNTIME_DATABASE_URL: 'mysql://reader:@db/aida_grants_test' },
+    { DB_USER: 'bad-name' }, { DB_USER: 'reader_user' },
+    { DB_USER: 'admin' }, { DB_NAME: 'asterisk' },
+    { DB_NAME: 'aida_%_test' }, { DB_PASSWORD: '' },
+    { MYSQL_ADMIN_PASSWORD: '' }, { MYSQL_ADMIN_PORT: '0' }, { MYSQL_ADMIN_PORT: '65536' },
+    { READER_DB_NAME: 'other' }, { READER_DB_USER: 'bad-name' },
+    { READER_DB_PASSWORD: '' }, { READER_DB_USER: 'root' },
+    { READER_DB_USER: 'admin' }, { DB_HOST: '' },
+
   ]) {
     await rm(capture);
     await assert.rejects(exec('bash', [script], { env: { ...env, ...change } }), error => {
@@ -94,10 +94,10 @@ test('disposable MySQL: provisioning, migrations, exact privileges, idempotence 
   });
   let runtimePassword = "runtime'\\$password", readerPassword = "reader'\\$password\n";
   const provision = () => exec('bash', [script], { env: { ...process.env,
-    DB_HOST: admin.host, DB_PORT: String(admin.port), MYSQL_ADMIN_USER: admin.user, MYSQL_ADMIN_PASSWORD: admin.password,
-    RUNTIME_MYSQL_HOST: admin.host, RUNTIME_MYSQL_PORT: String(admin.port), RUNTIME_MYSQL_DATABASE: database,
-    RUNTIME_MYSQL_USER: runtimeUser, RUNTIME_MYSQL_PASSWORD: runtimePassword,
-    OFFICEPULSE_RUNTIME_DATABASE_URL: `mysql://${readerUser}:${encodeURIComponent(readerPassword)}@${admin.host}/${database}`,
+    MYSQL_ADMIN_HOST: admin.host, MYSQL_ADMIN_PORT: String(admin.port), MYSQL_ADMIN_USER: admin.user, MYSQL_ADMIN_PASSWORD: admin.password,
+    DB_HOST: admin.host, DB_PORT: String(admin.port), DB_NAME: database,
+    DB_USER: runtimeUser, DB_PASSWORD: runtimePassword,
+    READER_DB_USER: readerUser, READER_DB_PASSWORD: readerPassword, READER_DB_NAME: database,
   } });
   const runtimeConfig = () => ({ ...admin, database, user: runtimeUser, password: runtimePassword });
   const grants = async (user: string) => (await connection.query<mysql.RowDataPacket[]>(`SHOW GRANTS FOR '${user}'@'%'`))[0].map(row => String(Object.values(row)[0])).sort();

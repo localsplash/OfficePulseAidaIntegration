@@ -7,17 +7,23 @@ This script replaces `deploy/sql/grants.sql` and its host/password placeholders.
 
 | Account | Password/configuration home | Grants on the runtime database |
 | --- | --- | --- |
-| `aida_runtime` | PlatformConfig, `officepulse` scope: `RUNTIME_MYSQL_USER`, `RUNTIME_MYSQL_PASSWORD`, and the other `RUNTIME_MYSQL_*` connection values | `SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER` |
-| `aidaadmin_ro` | AidaAdmin's existing `OFFICEPULSE_RUNTIME_DATABASE_URL` (its resolved service configuration) | `SELECT` |
+| `aida_runtime` | PlatformConfig, `app=officepulse`: `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` | `SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER` |
+| `aidaadmin_ro` | PlatformConfig, `app=aida-admin-runtime`: the same `DB_*` setting keys, with a distinct reader user/password | `SELECT` |
 
-The reader user/password come from that URL; do not create a second reader
-password setting. Usernames and passwords are environment inputs, not embedded
-secrets. Defaults are `aida_runtime`, `aidacalls_db`, and port 3306; explicit
-runtime settings take precedence. The reader's database must match the runtime
-database, and both users must differ from each other and the admin account.
-Its URL host can differ because applications may use different network paths.
-Database names follow the migration guard: `aidacalls_db` or a disposable
-`aida_*_test` schema only.
+AidaPlatformDB's database/app setup seeds both scopes and invokes this script
+with those exact values. No database URL setting is read. Passwords are literal,
+not URL-encoded; the optional `DB_PORT` defaults to 3306. Production requires
+`DB_HOST`, `DB_NAME`, `DB_USER` and `DB_PASSWORD` in the `officepulse` scope.
+Shared `aida` / `*` credentials cannot supply runtime database settings.
+
+The script receives the writer's `DB_*` values directly. The second connection's
+`DB_NAME`, `DB_USER` and `DB_PASSWORD` are passed as `READER_DB_NAME`,
+`READER_DB_USER`, and `READER_DB_PASSWORD` to distinguish the two accounts during
+one invocation. These are **operator-script adapter inputs**, not additional
+PlatformConfig setting keys. Reader and writer database names must match; their
+users must differ from one another and the operator. Reader host/port may differ
+from the writer's because the applications can use separate network paths.
+Database names remain `aidacalls_db` or disposable `aida_*_test` schemas only.
 
 Runtime grants cover DML, table creation/removal and migration 006's `ALTER
 TABLE`. Indexes in the released migrations are created inside `CREATE TABLE`,
@@ -33,18 +39,17 @@ from the environment's administrator secret. For example, use a disposable
 client on the database network:
 
 ```sh
-docker run --rm --network <database-network> \
-  -v "$PWD/scripts:/scripts:ro" \
-  -e RUNTIME_MYSQL_HOST -e RUNTIME_MYSQL_PORT -e RUNTIME_MYSQL_DATABASE \
-  -e RUNTIME_MYSQL_USER -e RUNTIME_MYSQL_PASSWORD \
-  -e OFFICEPULSE_RUNTIME_DATABASE_URL -e MYSQL_ADMIN_USER -e MYSQL_ADMIN_PASSWORD \
+docker run --rm --network <network> -v "$PWD/scripts:/scripts:ro" \
+  -e DB_HOST -e DB_PORT -e DB_NAME -e DB_USER -e DB_PASSWORD \
+  -e READER_DB_NAME -e READER_DB_USER -e READER_DB_PASSWORD \
+  -e MYSQL_ADMIN_USER -e MYSQL_ADMIN_PASSWORD \
   mysql:8.4 bash /scripts/db-users.sh
 ```
 
-`DB_HOST` and `DB_PORT`, when supplied, override only the admin client's network
-destination (pass `-e DB_HOST -e DB_PORT` as well). This lets an operator reach
-the same server through a tunnel/container-network name without modifying the
-application's settings. The script needs Bash and the `mysql` client, not Node.
+`MYSQL_ADMIN_HOST` and `MYSQL_ADMIN_PORT`, when supplied, override only the admin
+client's destination (pass those environment variables to the container too).
+This permits a tunnel/container-network name without changing app settings.
+The script needs Bash and the `mysql` client, not Node.
 
 Every run creates the database/users if missing, applies the supplied passwords
 with `ALTER USER`, revokes previous direct privileges/GRANT OPTION, then grants
@@ -86,7 +91,7 @@ converges the former runtime `ALL PRIVILEGES` to the narrower migration grants.
 
 ## Validation
 
-`npm test` checks input rejection, URL decoding, password escaping and client
+`npm test` checks input rejection, literal password preservation, password escaping and client
 failure handling without a database. Set `TEST_DB_USERS_MYSQL_URL` to an admin
 URL on a disposable MySQL 8.4 server with an `aida_*_test` path to also verify
 fresh/repeated provisioning, all released migrations under the restricted

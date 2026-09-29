@@ -15,9 +15,10 @@ const PROD_ENV = {
   MYSQL_USER: 'aida_integration',
   MYSQL_PASSWORD: 'pw',
   MYSQL_DATABASE: 'asterisk',
-  RUNTIME_MYSQL_HOST: 'runtime-db',
-  RUNTIME_MYSQL_USER: 'aida_runtime',
-  RUNTIME_MYSQL_PASSWORD: 'pw',
+  DB_NAME: 'aidacalls_db',
+  DB_HOST: 'runtime-db',
+  DB_USER: 'aida_runtime',
+  DB_PASSWORD: 'pw',
   NOCODB_BASE_URL: 'https://nocodb.test',
   NOCODB_API_TOKEN: 'token',
   LIVEKIT_URL: 'wss://acme.livekit.cloud',
@@ -32,14 +33,15 @@ test('administration-only production requires real platform services but no voic
     IDENTITY_BASE_URL: PROD_ENV.IDENTITY_BASE_URL,
     OFFICEPULSE_INSTANCE_ID: PROD_ENV.OFFICEPULSE_INSTANCE_ID,
     TRUSTED_SERVER_CIDRS: PROD_ENV.TRUSTED_SERVER_CIDRS,
-    RUNTIME_MYSQL_HOST: 'runtime-db', RUNTIME_MYSQL_USER: 'runtime', RUNTIME_MYSQL_PASSWORD: 'pw',
+    DB_NAME: 'aidacalls_db',
+    DB_HOST: 'runtime-db', DB_USER: 'runtime', DB_PASSWORD: 'pw',
     NOCODB_BASE_URL: PROD_ENV.NOCODB_BASE_URL, NOCODB_API_TOKEN: PROD_ENV.NOCODB_API_TOKEN,
   };
   const config = loadConfig(env);
   assert.equal(config.voiceEnabled, false);
   assert.equal(config.ari.password, '');
   assert.equal(config.livekit.apiSecret, '');
-  assert.throws(() => loadConfig({ ...env, RUNTIME_MYSQL_HOST: '' }), ConfigError);
+  assert.throws(() => loadConfig({ ...env, DB_HOST: '' }), ConfigError);
   assert.throws(() => loadConfig({ ...env, NOCODB_API_TOKEN: '' }), ConfigError);
   assert.throws(() => loadConfig({ ...env, VOICE_ENABLED: 'true' }), ConfigError);
   assert.throws(() => loadConfig({ ...PROD_ENV, VOICE_ENABLED: 'typo' }), ConfigError);
@@ -91,8 +93,10 @@ test('production requires the dependencies this service now orchestrates itself'
     'LIVEKIT_API_KEY',
     'LIVEKIT_API_SECRET',
     'LIVEKIT_SIP_HOST',
-    'RUNTIME_MYSQL_USER',
-    'RUNTIME_MYSQL_PASSWORD',
+    'DB_HOST',
+    'DB_NAME',
+    'DB_USER',
+    'DB_PASSWORD',
   ]) {
     const env: Record<string, string> = { ...PROD_ENV };
     delete env[key];

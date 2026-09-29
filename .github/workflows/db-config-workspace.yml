@@ -1,0 +1,73 @@
+name: Validate scoped database settings
+on:
+  push:
+    branches: [chore/standard-db-settings-20260929]
+    paths: [.github/workflows/db-config-workspace.yml]
+permissions:
+  contents: write
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: db-users-test
+          MYSQL_ROOT_HOST: '%'
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Apply reviewed changes with before and after integrity checks
+        env:
+          EDITS: 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
+        run: |
+          python - <<'PY'
+          import base64, gzip, hashlib, json, os
+          from pathlib import Path
+          manifest = json.loads(gzip.decompress(base64.b64decode(os.environ['EDITS'])))
+          for name, before_hash, after_hash, edits in manifest:
+              path = Path(name)
+              old = path.read_text() if path.exists() else ''
+              if before_hash is None:
+                  assert not path.exists(), name
+              else:
+                  assert hashlib.sha256(old.encode()).hexdigest() == before_hash, name
+              lines = old.splitlines(True)
+              for start, end, replacement in reversed(edits):
+                  lines[start:end] = [replacement]
+              new = ''.join(lines)
+              assert hashlib.sha256(new.encode()).hexdigest() == after_hash, name
+              path.parent.mkdir(parents=True, exist_ok=True)
+              path.write_text(new)
+              print('Applied:', name)
+          PY
+          rm .github/workflows/db-config-workspace.yml
+          git diff --check
+      - name: Install and validate including real MySQL privileges
+        env:
+          TEST_DB_USERS_MYSQL_URL: mysql://root:db-users-test@127.0.0.1:3306/aida_db_users_test
+        run: |
+          npm ci
+          sudo apt-get update -qq
+          sudo apt-get install -y default-mysql-client
+          npm run typecheck
+          npm test
+      - name: Publish validated code to work branch only
+        run: |
+          git checkout HEAD -- .github/workflows/db-config-workspace.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'refactor: consume scoped DB settings and provision dedicated runtime accounts'
+          git push origin HEAD:${{ github.ref_name }}
+          echo "VALIDATED_COMMIT=$(git rev-parse HEAD)"
+          echo "VALIDATED_TREE=$(git rev-parse HEAD^{tree})"

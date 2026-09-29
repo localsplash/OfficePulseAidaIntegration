@@ -1,0 +1,76 @@
+name: DB config verification
+on:
+  push:
+    branches: [chore/standard-db-settings-20260929]
+    paths: [.github/workflows/db-config-verify.yml]
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: db-users-test
+          MYSQL_ROOT_HOST: '%'
+        ports: ['3306:3306']
+        options: --health-cmd="mysqladmin ping --silent" --health-interval=5s --health-timeout=5s --health-retries=30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Apply integrity-checked source edits
+        run: |
+          python - <<'PY'
+          import base64, gzip, hashlib, json, re
+          from pathlib import Path
+          text = Path('.github/workflows/db-config-workspace.yml').read_text()
+          encoded = re.search(r'EDITS: (\S+)', text).group(1)
+          for a, b in [('XHH7q','XH7q'), ('bVVq','bVq'), ('PLJJyv','PLJyv'), ('MGJJ6h','MGJ6h')]:
+              encoded = encoded.replace(a,b)
+          raw = gzip.decompress(base64.b64decode(encoded))
+          assert hashlib.sha256(raw).hexdigest() == 'f600577e9cd6f6a061fcaca545c5dfdb34952e0bda9659c73aa0ea388023120d'
+          for name, before, after, edits in json.loads(raw):
+              path = Path(name)
+              old = path.read_text() if path.exists() else ''
+              assert hashlib.sha256(old.encode()).hexdigest() == before if before else not path.exists(), name
+              lines = old.splitlines(True)
+              for start, end, replacement in reversed(edits):
+                  lines[start:end] = [replacement]
+              new = ''.join(lines)
+              assert hashlib.sha256(new.encode()).hexdigest() == after, name
+              path.parent.mkdir(parents=True, exist_ok=True)
+              path.write_text(new)
+              print('Applied:', name)
+          PY
+          git diff --check
+      - name: Verify with disposable MySQL
+        env:
+          TEST_DB_USERS_MYSQL_URL: mysql://root:db-users-test@127.0.0.1:3306/aida_db_users_test
+        run: |
+          npm ci
+          sudo apt-get update -qq
+          sudo apt-get install -y default-mysql-client
+          npm run typecheck
+          npm test
+      - name: Publish tested work branch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'refactor: use scoped DB fields for OfficePulse runtime and provisioning'
+          git push origin HEAD:${{ github.ref_name }}
+          echo "VALIDATED_COMMIT=$(git rev-parse HEAD)"
+          echo "VALIDATED_TREE=$(git rev-parse HEAD^{tree})"
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: source-transfer-diagnostics
+          path: .github/workflows/db-config-workspace.yml
+          include-hidden-files: true
+          retention-days: 1

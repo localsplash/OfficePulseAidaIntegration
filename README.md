@@ -53,8 +53,8 @@ admission reads the persisted per-context/DID profile assignments
 | `HTTP_PORT` / `PUBLIC_HTTP_PORT` / `HTTP_BIND` | 8085 / 8086 / 0.0.0.0 | Private API and health/callback listener |
 | `TRUSTED_SERVER_CIDRS` / `TRUSTED_PROXY_CIDRS` | Required in production / empty | Separate service and proxy trust |
 | `HTTP_RATE_LIMIT_PER_MINUTE` / `HTTP_MAX_BODY_BYTES` | 300 / 65536 | HTTP limits |
-| `RUNTIME_MYSQL_HOST`, `RUNTIME_MYSQL_PORT`, `RUNTIME_MYSQL_USER`, `RUNTIME_MYSQL_PASSWORD` | Explicit production values / port 3306 | Integration diagnostics database |
-| `RUNTIME_MYSQL_DATABASE` | aidacalls_db | Only canonical runtime schema; migrations reject the external asterisk schema |
+| `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD` | Explicit production values / optional port 3306 | Runtime database; app=officepulse DB_* rows are seeded by AidaPlatformDB setup |
+| `DB_NAME` | Explicit in production; aidacalls_db in development | Only canonical runtime schema; migrations reject the external asterisk schema |
 | `NOCODB_BASE_URL`, `NOCODB_API_TOKEN`, `NOCODB_BASE_NAME`, `NOCODB_TIMEOUT_MS` | Required / PlatformConfig / 4000 | Scoped settings discovery |
 | `PBX_INVENTORY_ENABLED` | false | Enable private vendor configuration reads |
 | `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE` | Explicit production values / port 3306 | External OfficePulse vendor database coordinates |

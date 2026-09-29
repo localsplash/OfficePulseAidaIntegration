@@ -24,8 +24,9 @@ export async function resolvePlatformSettings(env: NodeJS.ProcessEnv, api: NocoR
       if (!key || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new Error('invalid PlatformConfig setting key');
       if (seen.has(key)) throw new Error(`duplicate PlatformConfig setting ${scope}/${key}`);
       seen.add(key);
-      const value = String(row.settingValue ?? '').trim();
-      if (value) merged[key] = value;
+      if (['DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER', 'DB_PASSWORD'].includes(key) && scope !== 'officepulse') continue;
+      const raw = String(row.settingValue ?? '');
+      if (raw.trim()) merged[key] = key === 'DB_PASSWORD' ? raw : raw.trim();
     }
   }
   for (const [key, value] of Object.entries(env)) if (value?.trim()) merged[key] = value;

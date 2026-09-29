@@ -230,11 +230,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       app: env.ARI_APP ?? 'aida',
     },
     runtimeMysql: {
-      host: str(env, 'RUNTIME_MYSQL_HOST', problems, required('127.0.0.1')),
-      port: int(env, 'RUNTIME_MYSQL_PORT', 3306, problems, 1, 65535),
-      user: str(env, 'RUNTIME_MYSQL_USER', problems, required('aida')),
-      password: str(env, 'RUNTIME_MYSQL_PASSWORD', problems, required('dev-only')),
-      database: env.RUNTIME_MYSQL_DATABASE ?? 'aidacalls_db',
+      host: str(env, 'DB_HOST', problems, required('127.0.0.1')),
+      port: int(env, 'DB_PORT', 3306, problems, 1, 65535),
+      user: str(env, 'DB_USER', problems, required('aida_runtime')),
+      password: str(env, 'DB_PASSWORD', problems, required('dev-only')),
+      database: str(env, 'DB_NAME', problems, required('aidacalls_db')),
     },
     nocodb: {
       baseUrl: str(env, 'NOCODB_BASE_URL', problems, required('http://127.0.0.1:8080')),

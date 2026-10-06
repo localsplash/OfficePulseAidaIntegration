@@ -1,21 +1,9 @@
 import { UpstreamError } from '../errors.js';
 
-/**
- * Read-only NocoDB v2 client for the AidaAdmin configuration base.
- *
- * Writer/reader split (issue #9): AidaAdmin owns and writes this base;
- * OfficePulseAidaIntegration only reads it. This client therefore exposes
- * no create/update/delete surface at all — the absence is the safeguard.
- *
- * The base is addressed by NAME and discovered at runtime, matching how
- * AidaAdmin creates it. Unlike AidaAdmin, a missing base is NEVER created
- * here: this service is not the writer, and an auto-created empty base
- * would silently report that every DID is unrouted.
- */
+/** Read-only NocoDB client used for scoped PlatformConfig settings discovery. */
 
 export const AIDA_BASE_NAME = 'PlatformConfig';
 
-const TABLES: Record<string, string> = { tenant: 'aida_tbl_TenantProfile', did_route: 'aida_tbl_DidRoute', assistant_profile: 'aida_tbl_AssistantProfile', extension: 'aida_tbl_Extension', ring_group: 'aida_tbl_RingGroup', ring_group_member: 'aida_tbl_RingGroupMember' };
 
 
 export type NocoRecord = Record<string, unknown>;
@@ -48,7 +36,7 @@ export interface NocoDbReadClientOptions {
   apiToken: string;
   timeoutMs: number;
   fetchImpl?: typeof fetch;
-  /** Overrides the base name; the deployment default is 'AidaAdmin'. */
+  /** Overrides the settings base name; default is PlatformConfig. */
   baseName?: string;
 }
 
@@ -122,7 +110,7 @@ export class NocoDbReadClient implements NocoReadApi {
       );
       if (matches.length === 0) {
         throw new BaseResolutionError(
-          `NocoDB has no base named ${this.baseName}. AidaAdmin owns and creates it; this service only reads it.`,
+          `NocoDB has no base named ${this.baseName}. The platform deployment owns and creates it; this service only reads it.`,
         );
       }
       if (matches.length > 1) {
@@ -158,9 +146,7 @@ export class NocoDbReadClient implements NocoReadApi {
   async listRecords(table: string, where: NocoWhere[], limit = 200): Promise<NocoRecord[]> {
     if (Date.now() - this.resolvedAt >= 30_000) { this.invalidate(); this.resolvedAt = Date.now(); }
     const tableIds = await this.resolveTableIds();
-    const platform = this.baseName === 'PlatformConfig';
-    const tableId = tableIds.get(platform ? (TABLES[table] ?? table) : table);
-    if (platform) where = where.map((w) => ({ ...w, field: w.field === 'tenant_id' || (table === 'tenant' && w.field === 'id') ? 'iTenantId' : w.field === 'identity_user_id' ? 'iUserId' : w.field }));
+    const tableId = tableIds.get(table);
     if (!tableId) {
       this.invalidate(); // the base may have gained the table since we looked
       throw new UpstreamError(`NocoDB base ${this.baseName} has no table '${table}'`, 'nocodb');
@@ -169,12 +155,7 @@ export class NocoDbReadClient implements NocoReadApi {
     if (where.some((w) => !/^[A-Za-z0-9_]+$/.test(w.field) || !/^[A-Za-z0-9@+_*.:\-]{1,255}$/.test(String(w.value)))) throw new Error('invalid configuration lookup');
     if (where.length > 0) params.set('where', whereClause(where));
     const rows = await this.listPages<NocoRecord>(`/api/v2/tables/${tableId}/records?${params}`, limit);
-    return rows.map((row) => platform ? {
-      ...row,
-      ...(row.iTenantId !== undefined ? { tenant_id: String(row.iTenantId) } : {}),
-      ...(row.iUserId !== undefined ? { identity_user_id: row.iUserId } : {}),
-      ...(table === 'tenant' ? { id: String(row.iTenantId), enabled: true } : {}),
-    } : row);
+    return rows;
   }
 
   async ping(): Promise<boolean> {

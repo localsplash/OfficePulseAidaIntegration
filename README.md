@@ -1,184 +1,188 @@
 # OfficePulseAidaIntegration
 
-Layer Aida onto OfficePulse without forking or modifying Asterisk source.
+The canonical development service exposes private Asterisk endpoint/queue
+inventory, opt-in POC provisioning, and integration call diagnostics. Asterisk/OfficePulse is
+the source of truth for PBX configuration. AidaAdmin administers Identity
+businesses, users, roles, business numbers and AI profiles, and manages scoped
+PBX objects through this service.
 
-A TypeScript/Node.js service for the office platform. The first combined deployment target is **dockerappvm01-dev**. For the POC it is both
-the **call orchestrator** and the Asterisk adapter — there is no
-AidaControl service (issue #9). It provides:
+There is no copied extension/queue desired state, provisioning synchronization,
+retry ledger, ring-group adapter or rollback switch. The optional writer changes
+Asterisk Realtime directly; the NocoDB routing graph remains removed. Reusable ARI, LiveKit, FastAGI, takeover and
+device modules and their tests remain. With voice enabled, ARI reconciliation,
+signed LiveKit callbacks and FastAGI still run. Agent bootstrap v2 and native
+queue admission are available through explicit opt-in configuration; disabled
+admission preserves PBX fallback. TAKEOVER returns 503 before recording a command
+until its separate native destination resolver is supplied. DRAIN_ACK remains supported. Handset attach, scoped observation and device-targeted takeover use live native SIP registrations and queue membership.
 
-1. **Inbound call orchestration** — FastAGI resolves the DID route and
-   assistant profile directly from the shared PlatformConfig NocoDB base, pins the
-   configuration it used onto a local call session, creates the LiveKit
-   room, dispatches the predefined `aida-prime` agent, and hands Asterisk
-   the routing variables.
-2. **ARI takeover control** — asynchronous multi-channel control: bridge
-   the caller with the LiveKit/Aida leg, ring a human on command, connect
-   the human instantly on answer, and drain Aida within a bounded window.
-3. **Realtime provisioning API** — private, typed HTTP API through which
-   AidaAdmin's server provisions extensions, ring groups, DIDs, and
-   MAC-based handsets into the Asterisk Realtime MySQL tables.
+## Current API
 
-## Data ownership
+| Listener | Routes | Access |
+| --- | --- | --- |
+| Private `HTTP_PORT=8085` | `/v1/admin/pbx/contexts`, `/v1/admin/pbx/extensions?context=X`, `/v1/admin/pbx/queues?context=X` | CIDR-admitted Admin server; scope is one Asterisk context on this PBX instance |
+| Private `HTTP_PORT=8085` | extension, queue, queue-member and DID mutations under `/v1/admin/pbx` | Explicit opt-in writer; same context scope and Admin controls (DID routes add `didContext`) |
+| Private `HTTP_PORT=8085` | `/v1/admin/calls/:id`, `/v1/admin/calls/:id/events` | Read-only observed integration call history |
+| Private `HTTP_PORT=8085` | POST `/v1/admin/calls/:id/commands` | DRAIN_ACK with voice enabled; TAKEOVER unavailable until native routing exists |
+| Private `HTTP_PORT=8085` | GET/DELETE `/v1/admin/handsets` | Context-scoped device administration |
+| Public `PUBLIC_HTTP_PORT=8086` | `/v1/handset/attach`, `/me`, `/calls`, `/logout`, call detail/takeover | Registration matching then device bearer auth; see handset runbook |
+| Public `PUBLIC_HTTP_PORT=8086` | POST `/v1/agent/calls/:id/bootstrap` | One-time call credentials; explicit native admission opt-in |
+| Public `PUBLIC_HTTP_PORT=8086` | `/healthz`, `/readyz`, signed LiveKit webhook | Callback verifies signature; disabled voice returns 503 |
 
-Applications may read shared databases, but each data set has exactly one
-writer:
+Legacy `/v1/provisioning`, `/v1/devices` and device `/v1/calls` paths remain absent. The smaller
+PBX writer exists only under `/v1/admin/pbx` when explicitly enabled.
+The private API is not browser authentication: AidaAdmin must authenticate its
+staff actor, authorize the requested tenant, resolve that tenant's Asterisk
+contexts, and authorize the call before forwarding a request. A context name
+selects the routing scope `{pbxInstanceId, context}`; it is never authorization by itself.
 
-| Data set | Writer | This service |
-|---|---|---|
-| NocoDB `PlatformConfig` voice tables | AidaAdmin | **reads only** |
-| Asterisk Realtime MySQL | this service | **writes** |
-| `aidacalls_db` runtime MySQL | this service | **writes** |
-| `aidacalls_db` (AidaAdmin's view) | — | AidaAdmin reads via a read-only account; commands stay HTTP actions |
+Read the [PBX inventory contract](docs/PBX_SOURCE_OF_TRUTH.md),
+[runtime contract](docs/PLATFORM_API.md) and
+[development cleanup manifest](docs/DEV_CLEANUP.md).
 
-The [platform API and cutover contract](docs/PLATFORM_API.md) defines canonical
-Identity tenant IDs, device authentication, startup migrations and the separate
-public/private HTTP listeners. It supersedes conflicting legacy interface text.
+## Configuration
 
-## Project invariant
+`NOCODB_BASE_URL` and `NOCODB_API_TOKEN` bootstrap `PlatformConfig.cfg_tbl_Setting`.
+Nonblank environment overrides take precedence over `officepulse`, `aida`, then
+`*` scopes. Restart after changing settings. OfficePulse no longer reads
+AidaAdmin's retired extension, ring-group, DID or device tables. Opt-in native
+admission reads the persisted per-context/DID profile assignments
+(`aida_tbl_ProfileAssignment`, managed through AidaAdmin) for a pinned call snapshot.
 
-**No Aida failure or cleanup operation may tear down an established
-caller-human bridge.** The takeover manager only ever removes the
-LiveKit/Aida leg; if the human disappears during the drain window, the
-drain is aborted and the caller stays with Aida.
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `HTTP_PORT` / `PUBLIC_HTTP_PORT` / `HTTP_BIND` | 8085 / 8086 / 0.0.0.0 | Private API and health/callback listener |
+| `TRUSTED_SERVER_CIDRS` / `TRUSTED_PROXY_CIDRS` | Required in production / empty | Separate service and proxy trust |
+| `HTTP_RATE_LIMIT_PER_MINUTE` / `HTTP_MAX_BODY_BYTES` | 300 / 65536 | HTTP limits |
+| `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD` | Explicit production values / optional port 3306 | Runtime database; app=officepulse DB_* rows are seeded by AidaPlatformDB setup |
+| `DB_NAME` | Explicit in production; aidacalls_db in development | Only canonical runtime schema; migrations reject the external asterisk schema |
+| `NOCODB_BASE_URL`, `NOCODB_API_TOKEN`, `NOCODB_BASE_NAME`, `NOCODB_TIMEOUT_MS` | Required / PlatformConfig / 4000 | Scoped settings discovery |
+| `PBX_INVENTORY_ENABLED` | false | Enable private vendor configuration reads |
+| `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE` | Explicit production values / port 3306 | External OfficePulse vendor database coordinates |
+| `PBX_INVENTORY_MYSQL_USER`, `PBX_INVENTORY_MYSQL_PASSWORD` | Required when inventory enabled | Dedicated SELECT-only account |
+| `OFFICEPULSE_INSTANCE_ID` | `officepulse-dev` outside production | PBX instance wire name `pbxInstanceId` (`^[A-Za-z0-9_.-]{1,80}$`); with an Asterisk context it forms the routing scope |
+| `PBX_INVENTORY_TENANTS_JSON` | retired | Startup fails when set: PBX scope is the Asterisk context. See `docs/PBX_SOURCE_OF_TRUTH.md` (Migrating from tenant maps) |
+| `PBX_PROVISIONING_ENABLED` | false | Register the POC PBX mutation routes |
+| `PBX_PROVISIONING_MYSQL_USER`, `PBX_PROVISIONING_MYSQL_PASSWORD` | required when enabled | Dedicated Realtime writer account |
+| `NATIVE_ADMISSION_ENABLED` | false | Opt in to native Agent bootstrap; see `docs/AGENT_BOOTSTRAP.md` |
+| `AGENT_PROFILE_IDS_JSON` | retired | Startup fails when set: profiles are assigned per context/DID in `aida_tbl_ProfileAssignment` through AidaAdmin. See `docs/AGENT_BOOTSTRAP.md` |
+| `AGENT_CONFIG_REFRESH_SECONDS` | 300 (range 30–3600) | Background refresh of the cached profiles; never a call-path timeout |
+| `AGENT_IDENTITY_TENANT_CHECK` | false | Consult Identity's runtime tenant check during refresh only, never during a call |
 
-## Call flow
+`VOICE_ENABLED=false` is the canonical development setting. With voice enabled,
+`ARI_URL`, `ARI_USERNAME`, `ARI_PASSWORD`, `LIVEKIT_URL`, `LIVEKIT_API_KEY`,
+`LIVEKIT_API_SECRET` and `LIVEKIT_SIP_HOST` remain required in production;
+`OFFICEPULSE_INSTANCE_ID` names this PBX instance (`pbxInstanceId` in `/readyz`, inventory
+responses, dispatch metadata and profile snapshots). `FASTAGI_PORT` defaults to 4573,
+`FASTAGI_BIND` to 0.0.0.0. Existing takeover timing/MOH and optional Pusher settings
+remain supported. PBX writer credentials are required only when its opt-in flag
+is enabled; Handset device admission uses live registration matching. Native Agent admission uses the opt-in
+settings in the bootstrap runbook; it loads the per-context/DID profile assignments at
+startup and refreshes them in the background, so admission and active calls issue no
+Identity or NocoDB request.
 
-```
-inbound DID (Realtime rows, written by this service's provisioning API)
-  -> recording disclosure (always, before FastAGI/LiveKit)
-  -> AGI(agi://LSAidaOffice01:4573/bootstrap)
-       -> read DID route + assistant profile from the NocoDB PlatformConfig base
-       -> persist call_session with the configuration ids AND revisions pinned
-       -> create LiveKit room, dispatch `aida-prime`, notify the handset
-       -> sets AIDA_DISPOSITION + routing channel variables
-  -> [aida-post-bootstrap] static include
-       SCREEN   -> Stasis(aida) -> ARI originates the LiveKit SIP-trunk leg
-                   with the X-Aida-Call-Session header, bridges
-                   caller <-> Aida  (media stays Asterisk<->LiveKit)
-       FALLBACK -> failure prompt -> direct Dial to destination, with the
-                   extension-side incident prompt on answer
-       REJECT   -> hangup
-  takeover command (AidaAdmin/AidaHandset -> this service)
-       -> single idempotent originate to extension/ring group
-       -> MOH while ringing; on answer: human joins bridge immediately,
-          Aida drains (<= 10 s or on drain-ack), only the Aida leg is removed
-```
+Readiness reports runtime MySQL and NocoDB as critical, and PBX inventory as a
+separate degraded component when not configured/unavailable. ARI is critical
+when voice is enabled; LiveKit and native-admission availability are reported
+separately. It never claims
+live PBX registrations or calls were validated. With no external PBX connection,
+Admin shows inventory unavailable while business administration and integration
+history remain usable.
 
-**Local fail-safe.** If NocoDB, LiveKit, or the runtime database is
-unavailable, the caller is still routed to *this DID's own* destination,
-resolved from a projection written at provisioning time — never to another
-tenant's destination. A deployment-wide default exists only as a final
-operator emergency fallback. If this service or ARI is down entirely, the
-dialplan alone still routes: disclosure → failure prompt → destination.
-Media never traverses this service.
+Provision the platform database accounts with [`scripts/db-users.sh`](scripts/db-users.sh)
+before startup. It uses the existing runtime settings and AidaAdmin reader URL,
+creates `aida_runtime`/`aidaadmin_ro`, and converges migration/read-only grants on
+every run. See [database account ownership and operator instructions](docs/DB_USERS.md),
+including the separate PBX account templates. The old runtime `grants.sql` is retired.
 
-## Network
+### Identity base URL
 
-Private HTTP `8085` serves AidaAdmin provisioning and administration. Public
-HTTP `8086` serves device bearer APIs and signed LiveKit webhooks through HTTPS
-at NPM. FastAGI `4573`, ARI and MySQL stay private. See the
-[firewall matrix](deploy/firewall-matrix.md) and [API contract](docs/PLATFORM_API.md).
+In PlatformConfig mode (the default) OfficePulse keeps no copy of the Identity
+URL. At startup the settings reader loads the Identity application's own record,
+`cfg_tbl_Setting` with `app = identity` and `settingKey = APP_BASE_URL`, validates
+it as an HTTPS origin (no credentials, path, query or fragment; a trailing slash is
+tolerated) and supplies it internally as `ID_BASE_URL` to the background tenant
+check and, unless `OPS_IDENTITY_URL` is set explicitly, to the Operations login.
+Only that record is consulted: another application's `APP_BASE_URL` is never
+selected and the key is never looked up without the `app` filter. A missing or
+blank record leaves the origin unset, so native admission refuses to start and
+names the record; duplicate or malformed records and a NocoDB failure during the
+lookup fail startup with an explicit configuration error. Errors and log lines
+never include the setting value or NocoDB credentials.
 
-## Development
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `PLATFORM_CONFIG_MODE` | PlatformConfig | `environment` is the retained environment-only mode: NocoDB is not read and every setting, including `ID_BASE_URL`, comes from the process environment |
+| `ID_BASE_URL` | resolved from `identity/APP_BASE_URL` | Retired as an input in PlatformConfig mode: a nonblank value in the environment or in any `*`/`aida`/`officepulse` row fails startup; set it by hand only in environment-only mode |
+| `OPS_IDENTITY_URL` | the resolved Identity origin | An explicit value keeps precedence; see `docs/OPERATIONS.md` |
 
-```bash
-npm ci
-npm run verify      # typecheck + all unit tests (no external credentials needed)
-npm run dev         # run against a configured environment
-npm run simulate:ari   # fake ARI server (WS + REST) for local runs
-npm run simulate:agi   # place a fake FastAGI call against a running service
-```
+The record is read once at startup; a central change takes effect at the next
+restart. Nothing is hot reloaded.
 
-A clean checkout runs the entire test suite with fakes for Asterisk
-(FastAGI + ARI), both MySQL databases, NocoDB, LiveKit, Pusher, and the
-provisioning server — no OfficePulse, NocoDB, or LiveKit credentials are
-required.
+## Development and deployment
 
-## Configuration (environment)
+Use Node 22: `npm ci`, `npm run verify`, then `npm run build`. The Dockerfile
+builds a non-root runtime image. The canonical integration runs on
+`officepulse-dev`; AidaAdmin and central runtime storage run on `dockerappvm01-dev`.
+Startup runs the original checksum-verified runtime migrations followed by the
+explicit two-table projection cleanup migration described in the manifest. This development data is disposable;
+no old configuration copies, compatibility switch or rollback window is needed.
+The systemd installer and generic Asterisk templates remain available for separately
+reviewed deployments; this change does not execute them or modify the PBX host.
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `NODE_ENV` | development | production requires all credentials + non-empty CIDRs |
-| `OFFICEPULSE_INSTANCE_ID` | — (required in prod) | instance identifier recorded on every call session |
-| `FASTAGI_PORT` / `FASTAGI_BIND` | 4573 / 0.0.0.0 | FastAGI listener |
-| `FASTAGI_ADVERTISED_HOST` | aida-integration.internal | host written into provisioned AGI() rows |
-| `FASTAGI_MAX_CONNECTIONS` / `FASTAGI_SESSION_TIMEOUT_MS` | 50 / 10000 | FastAGI hardening |
-| `HTTP_PORT` / `HTTP_BIND` | 8085 / 0.0.0.0 | private HTTP API |
-| `TRUSTED_SERVER_CIDRS` | — (required in prod) | callers allowed on `/v1/*` |
-| `TRUSTED_PROXY_CIDRS` | empty | peers whose X-Forwarded-For is honored |
-| `HTTP_RATE_LIMIT_PER_MINUTE` / `HTTP_MAX_BODY_BYTES` | 300 / 65536 | API rate/body limits |
-| `ARI_URL` / `ARI_USERNAME` / `ARI_PASSWORD` / `ARI_APP` | — / — / — / aida | ARI connection |
-| `MYSQL_HOST` / `MYSQL_PORT` / `MYSQL_USER` / `MYSQL_PASSWORD` / `MYSQL_DATABASE` | — | Asterisk Realtime DB |
-| `RUNTIME_MYSQL_HOST` / `_PORT` / `_USER` / `_PASSWORD` / `_DATABASE` | Asterisk host / 3306 / — / — / aidacalls_db | runtime DB this service owns |
-| `NOCODB_BASE_URL` / `NOCODB_API_TOKEN` / `NOCODB_BASE_NAME` / `NOCODB_TIMEOUT_MS` | — / — / AidaAdmin / 4000 | read-only configuration base |
-| `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` / `LIVEKIT_SIP_HOST` | — (required in prod) | room control, agent dispatch, webhook verification, SIP destination |
-| `LIVEKIT_AGENT_NAME` / `LIVEKIT_TIMEOUT_MS` | aida-prime / 5000 | predefined agent to dispatch |
-| `PUSHER_APP_ID` / `PUSHER_KEY` / `PUSHER_SECRET` / `PUSHER_CLUSTER` | unset | call-arrival notification (notification only) |
-| `CALL_DEFAULT_LOCALE` | en-US | locale passed in per-call agent metadata |
-| `OPERATOR_FALLBACK_CONTEXT` / `OPERATOR_FALLBACK_EXTENSION` | unset | emergency fallback; both or neither |
-| `PROVISIONING_SERVER_BASE_URL` / `_AUTH_TOKEN` / `_TIMEOUT_MS` | unset | existing HTTPS provisioning server |
-| `HANDSET_API_URL` | derived | URL AidaHandset enrols against |
-| `LIVEKIT_TRUNK_ENDPOINT` | unset | PJSIP endpoint name of the existing LiveKit SIP trunk |
-| `TAKEOVER_RING_TIMEOUT_SECONDS` / `TAKEOVER_DRAIN_TIMEOUT_MS` | 20 / 10000 | takeover behavior |
-| `TAKEOVER_DEFAULT_MOH_CLASS` | default | hold treatment while the destination rings |
-| `DIALPLAN_*`, `DEFAULT_SIP_TRANSPORT`, `DEFAULT_SIP_ALLOW` | see `src/config.ts` | dialplan/codec defaults |
+## Operations UI and API documentation
 
-## Deployment
+The operations UI is served at `https://officepulse-admin.localsplash.dev/`.
+Sign in with central Identity using a platform Super Admin account. It reads native
+extensions and queues of a selected Asterisk context, service readiness, live ARI endpoints/channels, and tenant
+integration call diagnostics. Every data request rechecks the central session.
+Its authenticated API
+console at `/ops/docs` can invoke explicitly browser-enabled Admin routes, including
+call commands and enabled PBX provisioning. Mutations require a same-origin request and CSRF token; each route
+must declare its authorization scope (context grammar, platform, or tenant-based call session) before the gateway exposes it.
 
-- `deploy/sql/schema.sql` — bookkeeping tables (in the Realtime DB).
-- `deploy/sql/runtime-schema.sql` — historical baseline consumed by the startup migration runner, which targets configured `aidacalls_db`; do not execute it directly
-  (call sessions/events, control commands, LiveKit participants, webhook
-  deliveries, provisioning operations, dependency status, DID fallback
-  projection). No transcript table exists by design.
-- `deploy/sql/grants.sql` — least-privilege MySQL account.
-- `asterisk/` — dialplan include, ARI/HTTP/extconfig/MOH templates for
-  the OfficePulse host.
-- `deploy/systemd/aida-integration.service` + `scripts/install.sh` /
-  `scripts/validate.sh` / `scripts/rollback.sh` — host install with kept
-  previous release; or `Dockerfile` (non-root) for containers.
-- `prompts/` + `scripts/generate-prompts.sh` / `scripts/deploy-prompts.sh`
-  — checksum-pinned prompt pipeline; corrupt or missing audio fails
-  deployment before any reload.
+Public, non-interactive Swagger remains at `https://officepulse-api.localsplash.dev/docs`.
+The Super Admin console is at `https://officepulse-admin.localsplash.dev/ops/docs`.
+The private API retains its backend network admission and is never called directly
+by the browser.
 
-## Security model (POC)
+See [operations deployment](docs/OPERATIONS.md) for settings, listener routing,
+Identity admission and the separate read-only ARI account. Internal ports 8085–8087
+are loopback upstreams; application clients use the public HTTPS names.
 
-- Private-LAN CIDR trust on the HTTP API, enforced in the firewall *and*
-  in-process (`TRUSTED_SERVER_CIDRS`); production refuses to start with
-  an empty allowlist. `X-Forwarded-For` is trusted only from
-  `TRUSTED_PROXY_CIDRS`.
-- SIP secrets exist **only** in `ps_auths`, returned exactly once on
-  create/rotation. Enrollment tokens pass through a single provisioning
-  transaction. Log redaction is structural (key-name based) and applies
-  to every log line; the route token is never logged.
-- Idempotency: linkedid for bootstrap (one call session and one LiveKit
-  room per call), requestId for provisioning, idempotency keys for control
-  commands, delivery ids for webhooks — all enforced by unique constraints
-  rather than by convention.
-- A create or rotation **replay never re-serves an existing SIP secret**;
-  it reports the operation as already applied, and recovering a lost
-  response requires an explicit, auditable rotation.
-- Per-call agent metadata is a strict allowlist: prompt/business context,
-  identifiers and locale only. Model, STT, TTS and voice are inherited from
-  the predefined `aida-prime` agent and are never sent.
-- MAC addresses are lookup data only — never an authentication factor.
-- Logs and metrics correlate by `callSessionId`/`linkedid` only.
-- A fallback destination is always tenant-checked: routing one tenant's
-  caller into another tenant's extension is refused outright, even when
-  that leaves only congestion.
+`TEST_MYSQL_URL` enables runtime migration/concurrency tests,
+`TEST_WEBHOOK_MYSQL_URL` tests independent event transaction primitives, and
+`TEST_PBX_MYSQL_URL` tests vendor inventory SELECT grants against disposable
+fixtures. Those tests are not actual OfficePulse MariaDB or live-call evidence.
 
+See [POC PBX provisioning](docs/PBX_PROVISIONING.md) for mutation contracts,
+DID hours/ring/AI behavior, Identity authorization, installed-schema limits, table-backed
+Realtime routing requirements, and apply-state limits.
 
-### Administration preview before voice provisioning
+`TEST_PBX_PROVISIONING_MYSQL_URL` validates writer grants and transactional context isolation on a disposable `aida_pbx_provisioning_*_test` database. `TEST_ASTERISK_BINARY` exercises the shared DID include in an isolated process without SIP/network modules. Neither test mutates the live PBX.
 
-Set `VOICE_ENABLED=false` on a new preview deployment to run the database-backed
-administration and device APIs before configuring PBX and LiveKit. Runtime MySQL,
-Identity and PlatformConfig remain required, including an explicit
-`RUNTIME_MYSQL_HOST`. ARI, FastAGI, voice dependency probes and room monitoring do
-not start; PBX changes, call commands and LiveKit webhooks return 503, and device
-responses omit room tokens. `/healthz` returns 200 while `/readyz` reports the
-disabled dependencies with 503. Use health for container liveness; readiness still
-means the full voice service is available. The default is `VOICE_ENABLED=true`.
+See [Agent bootstrap v2](docs/AGENT_BOOTSTRAP.md) for the #18/#19/#22/#23 implementation,
+credential/profile contracts, context-scoped admission, native ingress and SIP prerequisites,
+and live-call acceptance.
 
-This setting is for initial setup on an isolated deployment. Do not toggle it on
-a server with active calls or connected handset viewers, because room revocation
-monitoring stops. Supply the real voice configuration and restart with
-`VOICE_ENABLED=true` when the PBX and LiveKit project are ready.
+## Handsets and environment naming
+
+Read [Handset API](docs/HANDSET_API.md) for registration-based attach, queue alerts,
+hidden LiveKit observation, takeover, trust assumptions and deployment checks.
+Attached handsets are listed in the Operations UI under the selected context.
+
+Set `ENVIRONMENT_NAME` (`dev`, `staging`, `prod`) in PlatformConfig scope `*` and
+`OFFICEPULSE_INSTANCE_ID` in scope `officepulse`. Health/readiness return both.
+The instance must end with `-${ENVIRONMENT_NAME}` and may not contain
+`preview`, `copy`, `temp`, `tmp`, `backup`, or `test` (case-insensitive). Missing
+environment preserves legacy behavior with a startup warning. A multi-PBX host
+may explicitly override the instance id in its environment; it must still obey
+the central environment name. AidaAdmin's environment mismatch UI is owned by
+localsplash/AidaAdmin#45; Agent bootstrap remains v2.
+
+On dev use `officepulse-dev`. With no active calls, first rename its persisted
+`aida_tbl_ProfileAssignment.pbx_instance_id`, then set the central instance and
+remove its env override, and restart. Do not rename historical call records.
+Verify `agent-config-cache` has at least one cached assignment and native admission
+is ready; then validate a real admitted call. Bootstrap credentials alone should
+remain in the service env file (`NOCODB_BASE_URL`, `NOCODB_API_TOKEN`); move other
+host settings into `officepulse` scope, with secrets marked `bSecret=1`.

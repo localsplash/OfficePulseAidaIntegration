@@ -8,6 +8,8 @@ import type { AriApi, AriBridge, AriChannel, OriginateParams } from '../../src/a
  */
 export class FakeAri extends EventEmitter implements AriApi {
   originates: OriginateParams[] = [];
+  continued: Array<{ channelId: string; context: string; exten: string }> = [];
+  async continueInDialplan(channelId: string, context: string, exten: string): Promise<void> { this.continued.push({ channelId, context, exten }); }
   hangups: Array<{ channelId: string; reason?: string }> = [];
   bridges = new Map<string, { type: string; channels: Set<string> }>();
   mohStarts: Array<{ bridgeId: string; mohClass: string }> = [];
@@ -33,7 +35,7 @@ export class FakeAri extends EventEmitter implements AriApi {
 
   async originate(params: OriginateParams): Promise<AriChannel> {
     this.originates.push(params);
-    const id = `orig-${this.nextId++}`;
+    const id = params.channelId ?? `orig-${this.nextId++}`;
     for (const [name, value] of Object.entries(params.variables ?? {})) this.setVar(id, name, value);
     const channel = this.makeChannel(id, 'Down');
     this.originatedChannels.push(channel);

@@ -28,7 +28,7 @@ const server = http.createServer((req, res) => {
   console.log(`REST ${req.method} ${path}${url.search}`);
 
   if (req.method === 'POST' && path === '/ari/channels') {
-    const id = `sim-${nextId++}`;
+    const id = url.searchParams.get('channelId') ?? `sim-${nextId++}`;
     const channel = { id, name: `SIM/${id}`, state: 'Down' };
     channels.set(id, channel);
     respond(200, channel);

@@ -1,5 +1,6 @@
 import { ConfigError } from './errors.js';
 import { parseCidr } from './net/cidr.js';
+import type { RuntimeMysqlConfig } from './runtime/mysqlRuntimeStore.js';
 
 export type RuntimeEnv = 'production' | 'development' | 'test';
 
@@ -7,13 +8,16 @@ export interface AppConfig {
   env: RuntimeEnv;
   /** Explicit administration-only mode; calling requires configured voice connectors. */
   voiceEnabled: boolean;
+  pbxInventoryMysql?: RuntimeMysqlConfig;
+  /** Dedicated least-privilege writer for explicitly enabled POC provisioning. */
+  pbxProvisioningMysql?: RuntimeMysqlConfig;
   logLevel: 'debug' | 'info' | 'warn' | 'error';
   officePulseInstanceId: string;
+  environmentName?: 'dev' | 'staging' | 'prod';
+  handset: { requirePublicIpMatch: boolean; tokenTtlSeconds: number };
   fastAgi: {
     port: number;
     bind: string;
-    /** Hostname Asterisk uses to reach this service; used in provisioned AGI() rows. */
-    advertisedHost: string;
     maxConnections: number;
     sessionTimeoutMs: number;
   };
@@ -32,14 +36,6 @@ export interface AppConfig {
     password: string;
     app: string;
   };
-  /** OfficePulse's Asterisk Realtime database (this service is its writer). */
-  asteriskMysql: {
-    host: string;
-    port: number;
-    user: string;
-    password: string;
-    database: string;
-  };
   /** `aidacalls_db`: runtime state this service exclusively owns. */
   runtimeMysql: {
     host: string;
@@ -48,7 +44,7 @@ export interface AppConfig {
     password: string;
     database: string;
   };
-  /** Read-only access to the AidaAdmin NocoDB configuration base. */
+  /** Read-only scoped PlatformConfig access; no local PBX graph. */
   nocodb: {
     baseUrl: string;
     apiToken: string;
@@ -71,35 +67,13 @@ export interface AppConfig {
     cluster: string;
     timeoutMs: number;
   };
-  provisioningServer?: {
-    baseUrl: string;
-    authToken?: string;
-    timeoutMs: number;
-  };
-  handsetConfig: {
-    aidaControlUrl: string;
-    pusherKey?: string;
-    pusherCluster?: string;
-  };
-  dialplan: {
-    postBootstrapContext: string;
-    disclosureContext: string;
-    defaultTransport: string;
-    defaultAllow: string;
-  };
   takeover: {
     ringTimeoutSeconds: number;
     drainTimeoutMs: number;
+    announcementTimeoutMs: number;
     defaultMohClass: string;
     /** PJSIP endpoint name of the existing LiveKit Cloud SIP trunk. */
     livekitTrunkEndpoint?: string;
-  };
-  identity: { baseUrl: string; clientSecret?: string };
-  call: {
-    defaultLocale: string;
-    /** Operator emergency fallback; used only when a DID has no projection. */
-    operatorFallbackContext?: string;
-    operatorFallbackExtension?: string;
   };
 }
 
@@ -157,9 +131,8 @@ function cidrList(env: NodeJS.ProcessEnv, key: string, problems: string[]): stri
  * ConfigError listing every problem at once so a broken deployment fails
  * fast at startup instead of at first call.
  *
- * Production requires every dependency this service now orchestrates
- * directly (issue #9): NocoDB, LiveKit, and the runtime database are no
- * longer optional, because without them there is no screening at all.
+ * Voice connectors require their own credentials only when VOICE_ENABLED=true.
+ * PlatformConfig and the runtime database remain independent of PBX inventory.
  */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const problems: string[] = [];
@@ -172,8 +145,31 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     problems.push('VOICE_ENABLED must be true or false');
   }
   const voiceEnabled = env.VOICE_ENABLED !== 'false';
+  if (env.PBX_INVENTORY_ENABLED !== undefined && !['true', 'false'].includes(env.PBX_INVENTORY_ENABLED)) {
+    problems.push('PBX_INVENTORY_ENABLED must be true or false');
+  }
+  if (env.PBX_PROVISIONING_ENABLED !== undefined && !['true', 'false'].includes(env.PBX_PROVISIONING_ENABLED)) {
+    problems.push('PBX_PROVISIONING_ENABLED must be true or false');
+  }
+  // The retired tenant map fails startup explicitly (#23): PBX scope is the Asterisk context, never a copied map.
+  if (env.PBX_INVENTORY_TENANTS_JSON?.trim()) {
+    problems.push('PBX_INVENTORY_TENANTS_JSON is retired: PBX scope is the Asterisk context. See docs/PBX_SOURCE_OF_TRUTH.md (Migrating from tenant maps)');
+  }
   /** In production a value must be supplied; elsewhere a dev default stands in. */
   const required = (devFallback: string): string | undefined => (isProd ? undefined : devFallback);
+  // Wire name `pbxInstanceId`: with the context it forms the routing scope of every call and PBX object (#22).
+  const officePulseInstanceId = str(env, 'OFFICEPULSE_INSTANCE_ID', problems, required('officepulse-dev'));
+  if (officePulseInstanceId && !/^[A-Za-z0-9_.-]{1,80}$/.test(officePulseInstanceId)) {
+    problems.push('OFFICEPULSE_INSTANCE_ID must match ^[A-Za-z0-9_.-]{1,80}$');
+  }
+  const environmentName = optStr(env, 'ENVIRONMENT_NAME') as AppConfig['environmentName'];
+  if (environmentName && !['dev', 'staging', 'prod'].includes(environmentName)) {
+    problems.push('ENVIRONMENT_NAME must be dev, staging or prod');
+  }
+  if (environmentName && (/preview|copy|temp|tmp|backup|test/i.test(officePulseInstanceId) || !officePulseInstanceId.endsWith(`-${environmentName}`))) {
+    problems.push(`OFFICEPULSE_INSTANCE_ID '${officePulseInstanceId}' is not canonical for ENVIRONMENT_NAME '${environmentName}': use a permanent name ending in -${environmentName}`);
+  }
+  if (env.HANDSET_REQUIRE_PUBLIC_IP_MATCH !== undefined && !['true', 'false'].includes(env.HANDSET_REQUIRE_PUBLIC_IP_MATCH)) problems.push('HANDSET_REQUIRE_PUBLIC_IP_MATCH must be true or false');
 
   const logLevel = (env.LOG_LEVEL as AppConfig['logLevel']) || 'info';
   if (!['debug', 'info', 'warn', 'error'].includes(logLevel)) {
@@ -190,17 +186,31 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     voiceEnabled ? str(env, key, problems, required(fallback)) : '';
 
   const pusherAppId = optStr(env, 'PUSHER_APP_ID');
-  const asteriskHost = voice('MYSQL_HOST', '127.0.0.1');
 
   const config: AppConfig = {
     env: runtimeEnv,
     voiceEnabled,
+    pbxInventoryMysql: env.PBX_INVENTORY_ENABLED === 'true' ? {
+      host: str(env, 'MYSQL_HOST', problems, required('127.0.0.1')),
+      port: int(env, 'MYSQL_PORT', 3306, problems, 1, 65535),
+      database: str(env, 'MYSQL_DATABASE', problems, required('asterisk')),
+      user: str(env, 'PBX_INVENTORY_MYSQL_USER', problems),
+      password: str(env, 'PBX_INVENTORY_MYSQL_PASSWORD', problems),
+    } : undefined,
+    pbxProvisioningMysql: env.PBX_PROVISIONING_ENABLED === 'true' ? {
+      host: str(env, 'MYSQL_HOST', problems, required('127.0.0.1')),
+      port: int(env, 'MYSQL_PORT', 3306, problems, 1, 65535),
+      database: str(env, 'MYSQL_DATABASE', problems, required('asterisk')),
+      user: str(env, 'PBX_PROVISIONING_MYSQL_USER', problems),
+      password: str(env, 'PBX_PROVISIONING_MYSQL_PASSWORD', problems),
+    } : undefined,
     logLevel,
-    officePulseInstanceId: str(env, 'OFFICEPULSE_INSTANCE_ID', problems, required('officepulse-dev')),
+    officePulseInstanceId,
+    environmentName,
+    handset: { requirePublicIpMatch: env.HANDSET_REQUIRE_PUBLIC_IP_MATCH !== 'false', tokenTtlSeconds: int(env, 'HANDSET_TOKEN_TTL_SECONDS', 86400, problems, 120, 86400) },
     fastAgi: {
       port: int(env, 'FASTAGI_PORT', 4573, problems, 1, 65535),
       bind: env.FASTAGI_BIND ?? '0.0.0.0',
-      advertisedHost: env.FASTAGI_ADVERTISED_HOST ?? 'aida-integration.internal',
       maxConnections: int(env, 'FASTAGI_MAX_CONNECTIONS', 50, problems),
       sessionTimeoutMs: int(env, 'FASTAGI_SESSION_TIMEOUT_MS', 10_000, problems, 100),
     },
@@ -219,22 +229,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       password: voice('ARI_PASSWORD', 'dev-only'),
       app: env.ARI_APP ?? 'aida',
     },
-    asteriskMysql: {
-      host: asteriskHost,
-      port: int(env, 'MYSQL_PORT', 3306, problems, 1, 65535),
-      user: voice('MYSQL_USER', 'aida'),
-      password: voice('MYSQL_PASSWORD', 'dev-only'),
-      database: voice('MYSQL_DATABASE', 'asterisk'),
-    },
     runtimeMysql: {
-      // The runtime database usually lives on LSAidaOffice01 rather than
-      // beside Asterisk, but defaults to the same server when unset.
-      host: voiceEnabled ? (env.RUNTIME_MYSQL_HOST ?? asteriskHost)
-        : str(env, 'RUNTIME_MYSQL_HOST', problems, required('127.0.0.1')),
-      port: int(env, 'RUNTIME_MYSQL_PORT', 3306, problems, 1, 65535),
-      user: str(env, 'RUNTIME_MYSQL_USER', problems, required('aida')),
-      password: str(env, 'RUNTIME_MYSQL_PASSWORD', problems, required('dev-only')),
-      database: env.RUNTIME_MYSQL_DATABASE ?? 'aidacalls_db',
+      host: str(env, 'DB_HOST', problems, required('127.0.0.1')),
+      port: int(env, 'DB_PORT', 3306, problems, 1, 65535),
+      user: str(env, 'DB_USER', problems, required('aida_runtime')),
+      password: str(env, 'DB_PASSWORD', problems, required('dev-only')),
+      database: str(env, 'DB_NAME', problems, required('aidacalls_db')),
     },
     nocodb: {
       baseUrl: str(env, 'NOCODB_BASE_URL', problems, required('http://127.0.0.1:8080')),
@@ -259,44 +259,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
           timeoutMs: int(env, 'PUSHER_TIMEOUT_MS', 3_000, problems, 100),
         }
       : undefined,
-    provisioningServer: optStr(env, 'PROVISIONING_SERVER_BASE_URL')
-      ? {
-          baseUrl: env.PROVISIONING_SERVER_BASE_URL as string,
-          authToken: optStr(env, 'PROVISIONING_SERVER_AUTH_TOKEN'),
-          timeoutMs: int(env, 'PROVISIONING_SERVER_TIMEOUT_MS', 10_000, problems, 100),
-        }
-      : undefined,
-    handsetConfig: {
-      // AidaHandset still enrols against this service's own HTTP API.
-      aidaControlUrl: env.HANDSET_API_URL ?? `http://${env.FASTAGI_ADVERTISED_HOST ?? 'aida-integration.internal'}:${env.HTTP_PORT ?? '8085'}`,
-      pusherKey: optStr(env, 'PUSHER_KEY'),
-      pusherCluster: optStr(env, 'PUSHER_CLUSTER'),
-    },
-    dialplan: {
-      postBootstrapContext: env.DIALPLAN_POST_BOOTSTRAP_CONTEXT ?? 'aida-post-bootstrap',
-      disclosureContext: env.DIALPLAN_DISCLOSURE_CONTEXT ?? 'aida-disclosure',
-      defaultTransport: env.DEFAULT_SIP_TRANSPORT ?? 'transport-udp',
-      defaultAllow: env.DEFAULT_SIP_ALLOW ?? 'ulaw,alaw',
-    },
     takeover: {
       ringTimeoutSeconds: int(env, 'TAKEOVER_RING_TIMEOUT_SECONDS', 20, problems, 5, 120),
-      drainTimeoutMs: int(env, 'TAKEOVER_DRAIN_TIMEOUT_MS', 10_000, problems, 100, 10_000),
+      drainTimeoutMs: int(env, 'TAKEOVER_DRAIN_TIMEOUT_MS', 3000, problems, 100, 10_000),
+      announcementTimeoutMs: int(env, 'TAKEOVER_ANNOUNCEMENT_TIMEOUT_MS', 3000, problems, 100, 10_000),
       defaultMohClass: env.TAKEOVER_DEFAULT_MOH_CLASS ?? 'default',
       livekitTrunkEndpoint: optStr(env, 'LIVEKIT_TRUNK_ENDPOINT'),
     },
-    identity: { baseUrl: str(env, 'IDENTITY_BASE_URL', problems, required('http://identity:3200')), clientSecret: optStr(env, 'IDENTITY_CLIENT_SECRET') },
-    call: {
-      defaultLocale: env.CALL_DEFAULT_LOCALE ?? 'en-US',
-      operatorFallbackContext: optStr(env, 'OPERATOR_FALLBACK_CONTEXT'),
-      operatorFallbackExtension: optStr(env, 'OPERATOR_FALLBACK_EXTENSION'),
-    },
   };
 
-  const { operatorFallbackContext, operatorFallbackExtension } = config.call;
-  if ((operatorFallbackContext === undefined) !== (operatorFallbackExtension === undefined)) {
-    problems.push('OPERATOR_FALLBACK_CONTEXT and OPERATOR_FALLBACK_EXTENSION must be set together');
+  if (config.pbxProvisioningMysql && [config.runtimeMysql.user, config.pbxInventoryMysql?.user].includes(config.pbxProvisioningMysql.user)) {
+    problems.push('PBX_PROVISIONING_MYSQL_USER must be a dedicated account distinct from runtime and inventory users');
   }
-
   if (problems.length > 0) throw new ConfigError(problems);
   return config;
 }

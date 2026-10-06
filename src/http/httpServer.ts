@@ -1,14 +1,18 @@
 import http from 'node:http';
+import { buildInfo } from '../buildInfo.js';
 import { randomUUID } from 'node:crypto';
 import type { Logger } from '../logging/logger.js';
 import type { Readiness } from '../readiness.js';
 import { RateLimiter } from './rateLimit.js';
 import { ipInCidrs, resolveClientIp } from '../net/cidr.js';
 import { ConfigError, ValidationError } from '../errors.js';
+import { serveDocumentation } from './documentation.js';
+import type { RequestBodyLog } from '../logging/requestBodyLog.js';
 
 export interface ApiRequest {
   method: string;
   path: string;
+  query?: URLSearchParams;
   params: Record<string, string>;
   body: unknown;
   /** Set only for routes declaring rawBody; needed for signature checks. */
@@ -16,6 +20,8 @@ export interface ApiRequest {
   headers: Record<string, string | undefined>;
   clientIp: string;
   correlationId: string;
+  /** Present only when an authenticated Operations session invokes this handler in-process. */
+  operator?: { userId: number; email: string | null };
 }
 
 export interface ApiResponse {
@@ -27,7 +33,7 @@ export type RouteHandler = (req: ApiRequest) => Promise<ApiResponse> | ApiRespon
 
 export interface Route {
   method: string;
-  /** Path pattern like /v1/provisioning/extensions/:extensionId */
+  /** Path pattern like /v1/admin/calls/:callSessionId */
   pattern: string;
   handler: RouteHandler;
   /**
@@ -39,9 +45,28 @@ export interface Route {
   trusted?: boolean;
   /** Hands the handler the unparsed body, required to verify a signature. */
   rawBody?: boolean;
+  /** Records the request body and outcome in the request body log. Only for bodies without credentials. */
+  logRequestBody?: boolean;
+  /**
+   * Explicitly exposes this private Admin route through the authenticated
+   * Operations browser gateway. Future routes stay server-only until their
+   * authorization strategy is declared here. The gateway already restricts
+   * every request to Identity Super Admins: context-query and platform
+   * scopes validate grammar only, while call-session stays tenant-based
+   * because a call belongs to a customer.
+   */
+  operationsAccess?:
+    | { scope: 'tenant-query'; query: string }
+    | { scope: 'context-query'; query: 'context' }
+    | { scope: 'platform' }
+    | { scope: 'call-session'; param: string };
 }
 
 export interface HttpApiOptions {
+  documentation?: boolean;
+  /** Reported by /readyz so a client can pin the routing scope {pbxInstanceId, context} it administers. */
+  pbxInstanceId?: string;
+  environmentName?: string;
   logger: Logger;
   readiness: Readiness;
   trustedServerCidrs: readonly string[];
@@ -49,6 +74,7 @@ export interface HttpApiOptions {
   maxBodyBytes: number;
   rateLimitPerMinute: number;
   routes: Route[];
+  requestBodyLog?: Pick<RequestBodyLog, 'write'>;
   now?: () => number;
 }
 
@@ -123,6 +149,7 @@ export class HttpApi {
     const payload = JSON.stringify(body ?? {});
     res.writeHead(status, {
       'content-type': 'application/json',
+      'cache-control': 'no-store',
       'x-aida-correlation-id': correlationId,
     });
     res.end(payload);
@@ -161,15 +188,17 @@ export class HttpApi {
     const path = url.pathname;
     const method = (req.method ?? 'GET').toUpperCase();
     const log = this.opts.logger.child({ correlationId, method, path });
+    let recordBody: ((status: number, error?: string) => void) | undefined;
 
     try {
+      if (this.opts.documentation && method === 'GET' && await serveDocumentation(path, res)) return;
       if (path === '/healthz') {
-        this.send(res, 200, { status: 'ok' }, correlationId);
+        this.send(res, 200, { status: 'ok', ...buildInfo, pbxInstanceId: this.opts.pbxInstanceId, environmentName: this.opts.environmentName }, correlationId);
         return;
       }
       if (path === '/readyz') {
         const snapshot = this.opts.readiness.snapshot();
-        this.send(res, snapshot.ready ? 200 : 503, snapshot, correlationId);
+        this.send(res, snapshot.ready ? 200 : 503, { pbxInstanceId: this.opts.pbxInstanceId, environmentName: this.opts.environmentName, ...snapshot }, correlationId);
         return;
       }
 
@@ -205,9 +234,16 @@ export class HttpApi {
           params[name] = decodeURIComponent(match[i + 1] ?? '');
         });
         const raw = await this.readRawBody(req);
+        if (route.logRequestBody && this.opts.requestBodyLog) {
+          const bodyLog = this.opts.requestBodyLog;
+          const header = (name: string) => (typeof req.headers[name] === 'string' ? req.headers[name] : undefined);
+          recordBody = (status, error) => void bodyLog.write({ correlationId, method, path, clientIp,
+            userAgent: header('user-agent'), contentType: header('content-type'), raw, status, error });
+        }
         const out = await route.handler({
           method,
           path,
+          query: url.searchParams,
           params,
           body: route.rawBody ? undefined : this.parseBody(raw),
           rawBody: route.rawBody ? raw : undefined,
@@ -216,6 +252,8 @@ export class HttpApi {
           correlationId,
         });
         this.send(res, out.status, out.body, correlationId);
+        const error = out.status >= 400 ? (out.body as { error?: unknown } | undefined)?.error : undefined;
+        recordBody?.(out.status, typeof error === 'string' ? error : undefined);
         return;
       }
 
@@ -228,6 +266,7 @@ export class HttpApi {
       } else {
         log.warn('request rejected', { err, status });
       }
+      recordBody?.(status, message);
       if (err instanceof ConfigError) {
         this.send(res, 500, { error: 'configuration error' }, correlationId);
         return;

@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { buildInfo } from '../src/buildInfo.js';
 import assert from 'node:assert/strict';
 import { HttpApi, publicApiOptions } from '../src/http/httpServer.js';
 import { Readiness } from '../src/readiness.js';
@@ -15,6 +16,7 @@ async function withApi(
   const api = new HttpApi({
     logger,
     readiness,
+    pbxInstanceId: 'op-test', environmentName: 'dev',
     trustedServerCidrs: opts?.trustedServerCidrs ?? ['127.0.0.1/32'],
     trustedProxyCidrs: [],
     maxBodyBytes: opts?.maxBodyBytes ?? 1024,
@@ -47,12 +49,18 @@ async function withApi(
 
 test('healthz is open; readyz reflects dependency state', async () => {
   await withApi(async (base, readiness) => {
-    assert.equal((await fetch(`${base}/healthz`)).status, 200);
-    assert.equal((await fetch(`${base}/readyz`)).status, 200);
+    const health = await fetch(`${base}/healthz`);
+    assert.equal(health.status, 200);
+    assert.deepEqual(await health.json(), { status: 'ok', ...buildInfo, pbxInstanceId: 'op-test', environmentName: 'dev' });
+    const ready = await fetch(`${base}/readyz`);
+    assert.equal(ready.status, 200);
+    // Both listeners name the serving PBX instance so a client can pin the scope it administers.
+    assert.equal(((await ready.json()) as { pbxInstanceId: string }).pbxInstanceId, 'op-test');
     readiness.set('dep', false, 'mysql lost');
     const degraded = await fetch(`${base}/readyz`);
     assert.equal(degraded.status, 503);
-    const body = (await degraded.json()) as { components: Record<string, { detail?: string }> };
+    const body = (await degraded.json()) as { pbxInstanceId: string; components: Record<string, { detail?: string }> };
+    assert.equal(body.pbxInstanceId, 'op-test');
     assert.equal(body.components.dep?.detail, 'mysql lost');
   });
 });

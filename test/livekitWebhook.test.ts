@@ -34,7 +34,7 @@ class WebhookRuntime extends FakeRuntimeStore {
       if (delivery.eventType === 'participant_joined' && participant) {
         await this.upsertParticipant(delivery.callSessionId, { participantSid: participant.sid,
           identity: participant.identity, kind: participant.kind });
-        if (participant.isAgent && !session.endedAt) session.agentParticipantSid = participant.sid;
+
       } else if (delivery.eventType === 'participant_left' && participant) {
         await this.markParticipantLeft(delivery.callSessionId, participant.sid);
         if (session.agentParticipantSid === participant.sid) session.agentParticipantSid = undefined;
@@ -80,8 +80,8 @@ test('a correctly signed webhook is accepted and recorded', async () => {
   assert.equal(outcome.accepted, true);
   assert.equal(outcome.event, 'participant_joined');
   assert.equal(runtime.participants.get(CALL_SESSION_ID)?.get('PA_agent')?.kind, 'AGENT');
-  // The agent participant SID becomes the handle for later data sends.
-  assert.equal((await runtime.getCallSession(CALL_SESSION_ID))?.agentParticipantSid, 'PA_agent');
+  // A signed join is not authorization for an intended dispatch.
+  assert.equal((await runtime.getCallSession(CALL_SESSION_ID))?.agentParticipantSid, undefined);
   assert.deepEqual(runtime.eventTypes(CALL_SESSION_ID), ['livekit.participant_joined']);
 });
 
@@ -229,6 +229,31 @@ test('the LiveKit client signs REST calls and reports failures as upstream error
     }),
     /returned 500/,
   );
+});
+
+test('agent dispatch metadata v2 carries exactly the credential and the routing scope', async () => {
+  const { logger } = captureLogger();
+  const seen: Array<Record<string, unknown>> = [];
+  const client = new LiveKitClient({ url: 'wss://acme.livekit.cloud', apiKey: API_KEY, apiSecret: API_SECRET, agentName: 'aida-prime-bootstrap-dev', timeoutMs: 200, logger,
+    fetchImpl: (async (_input: string | URL | Request, init?: RequestInit) => { seen.push(JSON.parse(String(init?.body))); return new Response('{"id":"dispatch-1"}', { status: 200 }); }) as typeof fetch });
+  const token = 'b'.repeat(43);
+  assert.equal(await client.dispatchAgent('aida-room', { callSessionId: 'cs-1', bootstrapToken: token, pbxInstanceId: 'op-test', context: 'office-main' }), 'dispatch-1');
+  assert.deepEqual(JSON.parse(String(seen[0]!.metadata)), { callSessionId: 'cs-1', bootstrapToken: token, pbxInstanceId: 'op-test', context: 'office-main' });
+  assert.equal(seen[0]!.agent_name, 'aida-prime-bootstrap-dev');
+  assert.equal(seen[0]!.restart_policy, 'JRP_NEVER');
+});
+
+test('room deletion uses the LiveKit DeleteRoom API and required roomCreate grant', async () => {
+  let sent: { url: string; body: unknown; video: unknown } | undefined;
+  const client = new LiveKitClient({ url: 'wss://acme.livekit.cloud', apiKey: API_KEY, apiSecret: API_SECRET,
+    agentName: 'aida-prime', timeoutMs: 200, logger: captureLogger().logger,
+    fetchImpl: async (input, init) => {
+      const token = (init?.headers as Record<string, string>).authorization!.slice('Bearer '.length);
+      sent = { url: String(input), body: JSON.parse(String(init?.body)), video: JSON.parse(Buffer.from(token.split('.')[1]!, 'base64url').toString()).video };
+      return new Response('{}');
+    } });
+  await client.deleteRoom('aida-call');
+  assert.deepEqual(sent, { url: 'https://acme.livekit.cloud/twirp/livekit.RoomService/DeleteRoom', body: { room: 'aida-call' }, video: { roomCreate: true } });
 });
 
 test('an effect failure reaches HTTP error handling and a retry can apply the delivery', async () => {

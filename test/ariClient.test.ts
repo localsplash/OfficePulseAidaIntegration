@@ -100,7 +100,7 @@ test('REST requests carry basic auth and surface HTTP errors', async () => {
     fetchImpl,
   });
 
-  const channel = await client.originate({ endpoint: 'Local/100@office', appArgs: 'human,cs-1,k1', timeoutSeconds: 20 });
+  const channel = await client.originate({ endpoint: 'Local/100@office', appArgs: 'human,cs-1,k1', timeoutSeconds: 20, channelId: 'human-before-response' });
   assert.equal(channel.id, 'c9');
   const first = seen[0];
   assert.equal(first?.method, 'POST');
@@ -108,6 +108,7 @@ test('REST requests carry basic auth and surface HTTP errors', async () => {
   const url = new URL(first?.url as string);
   assert.equal(url.searchParams.get('endpoint'), 'Local/100@office');
   assert.equal(url.searchParams.get('timeout'), '20');
+  assert.equal(url.searchParams.get('channelId'), 'human-before-response');
   assert.equal(url.searchParams.get('app'), 'aida');
 
   await assert.rejects(client.hangup('broken'), /returned 404/);

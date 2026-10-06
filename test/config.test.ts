@@ -15,8 +15,10 @@ const PROD_ENV = {
   MYSQL_USER: 'aida_integration',
   MYSQL_PASSWORD: 'pw',
   MYSQL_DATABASE: 'asterisk',
-  RUNTIME_MYSQL_USER: 'aida_runtime',
-  RUNTIME_MYSQL_PASSWORD: 'pw',
+  DB_NAME: 'aidacalls_db',
+  DB_HOST: 'runtime-db',
+  DB_USER: 'aida_runtime',
+  DB_PASSWORD: 'pw',
   NOCODB_BASE_URL: 'https://nocodb.test',
   NOCODB_API_TOKEN: 'token',
   LIVEKIT_URL: 'wss://acme.livekit.cloud',
@@ -31,15 +33,15 @@ test('administration-only production requires real platform services but no voic
     IDENTITY_BASE_URL: PROD_ENV.IDENTITY_BASE_URL,
     OFFICEPULSE_INSTANCE_ID: PROD_ENV.OFFICEPULSE_INSTANCE_ID,
     TRUSTED_SERVER_CIDRS: PROD_ENV.TRUSTED_SERVER_CIDRS,
-    RUNTIME_MYSQL_HOST: 'runtime-db', RUNTIME_MYSQL_USER: 'runtime', RUNTIME_MYSQL_PASSWORD: 'pw',
+    DB_NAME: 'aidacalls_db',
+    DB_HOST: 'runtime-db', DB_USER: 'runtime', DB_PASSWORD: 'pw',
     NOCODB_BASE_URL: PROD_ENV.NOCODB_BASE_URL, NOCODB_API_TOKEN: PROD_ENV.NOCODB_API_TOKEN,
   };
   const config = loadConfig(env);
   assert.equal(config.voiceEnabled, false);
   assert.equal(config.ari.password, '');
   assert.equal(config.livekit.apiSecret, '');
-  assert.equal(config.asteriskMysql.host, '');
-  assert.throws(() => loadConfig({ ...env, RUNTIME_MYSQL_HOST: '' }), ConfigError);
+  assert.throws(() => loadConfig({ ...env, DB_HOST: '' }), ConfigError);
   assert.throws(() => loadConfig({ ...env, NOCODB_API_TOKEN: '' }), ConfigError);
   assert.throws(() => loadConfig({ ...env, VOICE_ENABLED: 'true' }), ConfigError);
   assert.throws(() => loadConfig({ ...PROD_ENV, VOICE_ENABLED: 'typo' }), ConfigError);
@@ -49,7 +51,8 @@ test('development config loads with defaults', () => {
   const config = loadConfig({ NODE_ENV: 'development' });
   assert.equal(config.fastAgi.port, 4573);
   assert.equal(config.http.port, 8085);
-  assert.equal(config.takeover.drainTimeoutMs, 10_000);
+  assert.equal(config.takeover.drainTimeoutMs, 3000);
+  assert.equal(config.takeover.announcementTimeoutMs, 3000);
 });
 
 test('production requires credentials and non-empty CIDR allowlist', () => {
@@ -82,8 +85,7 @@ test('drain timeout is capped at the 10 second maximum', () => {
 });
 
 test('production requires the dependencies this service now orchestrates itself', () => {
-  // Each is individually load-bearing: without NocoDB there is no route,
-  // without LiveKit no screening, without the runtime database no session.
+  // Voice and scoped settings credentials are validated independently.
   for (const key of [
     'NOCODB_BASE_URL',
     'NOCODB_API_TOKEN',
@@ -91,8 +93,10 @@ test('production requires the dependencies this service now orchestrates itself'
     'LIVEKIT_API_KEY',
     'LIVEKIT_API_SECRET',
     'LIVEKIT_SIP_HOST',
-    'RUNTIME_MYSQL_USER',
-    'RUNTIME_MYSQL_PASSWORD',
+    'DB_HOST',
+    'DB_NAME',
+    'DB_USER',
+    'DB_PASSWORD',
   ]) {
     const env: Record<string, string> = { ...PROD_ENV };
     delete env[key];
@@ -107,13 +111,52 @@ test('no AidaControl configuration is read or required any more', () => {
   assert.equal(config.livekit.agentName, 'aida-prime');
 });
 
-test('the operator emergency fallback must be complete or absent', () => {
-  assert.throws(() => loadConfig({ ...PROD_ENV, OPERATOR_FALLBACK_CONTEXT: 'emergency' }), ConfigError);
-  assert.throws(() => loadConfig({ ...PROD_ENV, OPERATOR_FALLBACK_EXTENSION: '000' }), ConfigError);
-  const config = loadConfig({
-    ...PROD_ENV,
-    OPERATOR_FALLBACK_CONTEXT: 'emergency',
-    OPERATOR_FALLBACK_EXTENSION: '000',
-  });
-  assert.equal(config.call.operatorFallbackContext, 'emergency');
+test('retired PBX writer credentials and rollback flag are ignored', () => {
+  const config = loadConfig({ ...PROD_ENV, MYSQL_USER: 'retired', LEGACY_PBX_PROVISIONING_ENABLED: 'true' });
+  assert.equal('asteriskMysql' in config, false);
+  assert.equal('legacyPbxProvisioningEnabled' in config, false);
+});
+
+test('POC provisioning is opt-in and requires its dedicated writer credentials', () => {
+  const config = loadConfig({ ...PROD_ENV, PBX_PROVISIONING_ENABLED: 'true',
+    PBX_PROVISIONING_MYSQL_USER: 'pbx_writer', PBX_PROVISIONING_MYSQL_PASSWORD: 'writer-password' });
+  assert.equal(config.pbxProvisioningMysql?.user, 'pbx_writer');
+  assert.equal(config.pbxProvisioningMysql?.database, 'asterisk');
+  assert.throws(() => loadConfig({ ...PROD_ENV, PBX_PROVISIONING_ENABLED: 'true' }), /PBX_PROVISIONING_MYSQL_USER/);
+  assert.throws(() => loadConfig({ ...PROD_ENV, PBX_PROVISIONING_ENABLED: 'yes' }), /PBX_PROVISIONING_ENABLED/);
+});
+
+test('the retired tenant map fails startup explicitly; the Asterisk context is the PBX scope', () => {
+  assert.throws(() => loadConfig({ ...PROD_ENV, PBX_INVENTORY_TENANTS_JSON: '{"1":{"contexts":["one"],"queueNames":[]}}' }),
+    (error: ConfigError) => error.problems.includes('PBX_INVENTORY_TENANTS_JSON is retired: PBX scope is the Asterisk context. See docs/PBX_SOURCE_OF_TRUTH.md (Migrating from tenant maps)'));
+  assert.throws(() => loadConfig({ NODE_ENV: 'development', PBX_INVENTORY_TENANTS_JSON: '{}' }), /PBX_INVENTORY_TENANTS_JSON is retired/);
+  const config = loadConfig({ ...PROD_ENV, PBX_INVENTORY_TENANTS_JSON: '  ' });
+  assert.equal('pbxInventoryScopes' in config, false);
+});
+
+test('OFFICEPULSE_INSTANCE_ID is the PBX instance wire name and must fit its grammar', () => {
+  assert.equal(loadConfig({ NODE_ENV: 'development' }).officePulseInstanceId, 'officepulse-dev');
+  assert.equal(loadConfig({ ...PROD_ENV, OFFICEPULSE_INSTANCE_ID: 'pbx.site-1_A' }).officePulseInstanceId, 'pbx.site-1_A');
+  for (const id of ['bad id', 'x'.repeat(81), 'op/1', 'op:1']) assert.throws(() => loadConfig({ ...PROD_ENV, OFFICEPULSE_INSTANCE_ID: id }), /OFFICEPULSE_INSTANCE_ID must match/, id);
+  assert.throws(() => loadConfig({ ...PROD_ENV, OFFICEPULSE_INSTANCE_ID: '' }), /OFFICEPULSE_INSTANCE_ID is required/);
+});
+
+test('PBX writer cannot reuse inventory or runtime account names', () => {
+  for (const user of ['aida_runtime', 'inventory_ro']) {
+    assert.throws(() => loadConfig({ ...PROD_ENV, PBX_PROVISIONING_ENABLED: 'true',
+      PBX_PROVISIONING_MYSQL_USER: user, PBX_PROVISIONING_MYSQL_PASSWORD: 'unused',
+      PBX_INVENTORY_ENABLED: 'true', PBX_INVENTORY_MYSQL_USER: 'inventory_ro', PBX_INVENTORY_MYSQL_PASSWORD: 'unused' }), /dedicated account/);
+  }
+});
+
+test('environment naming accepts permanent matching names and refuses mismatches or temporary names', () => {
+  for (const name of ['dev', 'staging', 'prod']) assert.equal(loadConfig({ ENVIRONMENT_NAME: name, OFFICEPULSE_INSTANCE_ID: `officepulse-${name}` }).environmentName, name);
+  for (const id of ['dockerappvm01-dev-preview', 'officepulse-prod', 'COPY-dev', 'temp-dev', 'tmp-dev', 'backup-dev', 'test-dev']) {
+    assert.throws(() => loadConfig({ ENVIRONMENT_NAME: 'dev', OFFICEPULSE_INSTANCE_ID: id }), new RegExp(`OFFICEPULSE_INSTANCE_ID '${id}'.*ENVIRONMENT_NAME 'dev'`));
+  }
+  assert.equal(loadConfig({ OFFICEPULSE_INSTANCE_ID: 'legacy-preview' }).environmentName, undefined);
+  assert.throws(() => loadConfig({ ENVIRONMENT_NAME: 'unknown' }), /ENVIRONMENT_NAME must/);
+  assert.equal(loadConfig({}).handset.requirePublicIpMatch, true);
+  assert.equal(loadConfig({}).handset.tokenTtlSeconds, 86400);
+  assert.throws(() => loadConfig({ HANDSET_TOKEN_TTL_SECONDS: '999999' }), /HANDSET_TOKEN_TTL_SECONDS/);
 });

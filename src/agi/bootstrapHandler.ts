@@ -1,9 +1,35 @@
 import type { AgiSession } from './agiSession.js';
 import type { Logger } from '../logging/logger.js';
-import type { CallOrchestrator, BootstrapDecision } from '../orchestrator/callOrchestrator.js';
+export interface BootstrapRequest {
+  officePulseInstanceId: string;
+  asteriskLinkedId: string;
+  asteriskChannelId?: string;
+  callerNumber?: string;
+  didE164: string;
+  ingressContext?: string;
+  fallbackQueue?: string;
+}
+export interface BootstrapDecision {
+  disposition: 'SCREEN' | 'FALLBACK' | 'REJECT';
+  callSessionId?: string;
+  roomName?: string;
+  sipDestination?: string;
+  routeToken?: string;
+  fallback?: { context: string; exten: string; source: string };
+  fallbackReason?: string;
+}
+export interface BootstrapDecider {
+  bootstrapInboundCall(request: BootstrapRequest): Promise<BootstrapDecision>;
+}
+/** Preserve the PBX's existing channel fallback until native queue admission is defined. */
+export const nativePbxFallback: BootstrapDecider = {
+  async bootstrapInboundCall() {
+    return { disposition: 'FALLBACK', fallbackReason: 'native-pbx-admission-not-configured' };
+  },
+};
 
 export interface BootstrapHandlerDeps {
-  orchestrator: CallOrchestrator;
+  orchestrator: BootstrapDecider;
   officePulseInstanceId: string;
   logger: Logger;
 }
@@ -30,19 +56,19 @@ function sanitizeCallerNumber(raw: string | undefined): string | undefined {
  * Reads call identity from the AGI environment, asks the local orchestrator
  * for a routing decision, and writes the AIDA_* channel variables the
  * static dialplan include consumes. Every failure mode degrades to
- * AIDA_DISPOSITION=FALLBACK with this DID's own destination, so the caller
- * always reaches a human after the local prompts.
+ * AIDA_DISPOSITION=FALLBACK. Canonical startup preserves fallback variables
+ * supplied by the PBX dialplan; no local destination projection is consulted.
  */
 export function createBootstrapHandler(deps: BootstrapHandlerDeps): (session: AgiSession) => Promise<void> {
   return async (session: AgiSession): Promise<void> => {
     const env = session.env;
     const uniqueid = env['agi_uniqueid'] ?? '';
     const channel = env['agi_channel'] ?? '';
-    const didE164 = env['agi_extension'] ?? '';
+    const didE164 = env['agi_arg_1'] ?? env['agi_extension'] ?? '';
     const callerNumber = sanitizeCallerNumber(env['agi_callerid']);
 
     const linkedid = (await safeGetVar(session, 'ASTERISK_LINKEDID')) || uniqueid;
-    const instanceId = (await safeGetVar(session, 'OFFICEPULSE_INSTANCE_ID')) || deps.officePulseInstanceId;
+    const instanceId = deps.officePulseInstanceId;
     const log = deps.logger.child({ linkedid, uniqueid, channel });
 
     let decision: BootstrapDecision;
@@ -50,8 +76,11 @@ export function createBootstrapHandler(deps: BootstrapHandlerDeps): (session: Ag
       decision = await deps.orchestrator.bootstrapInboundCall({
         officePulseInstanceId: instanceId,
         asteriskLinkedId: linkedid,
+        asteriskChannelId: uniqueid,
         callerNumber,
         didE164,
+        ingressContext: env.agi_arg_2,
+        fallbackQueue: env.agi_arg_3,
       });
     } catch (err) {
       // The orchestrator degrades internally; reaching here means something
@@ -61,12 +90,19 @@ export function createBootstrapHandler(deps: BootstrapHandlerDeps): (session: Ag
       return;
     }
 
+    if (decision.callSessionId) await session.setVariable(VAR.callSessionId, decision.callSessionId);
     switch (decision.disposition) {
       case 'SCREEN': {
-        await session.setVariable(VAR.disposition, 'SCREEN');
+        await session.setVariable(VAR.disposition, 'FALLBACK');
         await session.setVariable(VAR.callSessionId, decision.callSessionId as string);
         await session.setVariable(VAR.roomName, decision.roomName as string);
         await session.setVariable(VAR.sipDestination, decision.sipDestination as string);
+        if (decision.routeToken) await session.setVariable('__AIDA_ROUTE_TOKEN', decision.routeToken);
+        if (decision.fallback) {
+          await session.setVariable(VAR.fallbackContext, decision.fallback.context);
+          await session.setVariable(VAR.fallbackExtension, decision.fallback.exten);
+        }
+        await session.setVariable(VAR.disposition, 'SCREEN');
         log.info('bootstrap SCREEN', { callSessionId: decision.callSessionId, roomName: decision.roomName });
         return;
       }

@@ -1,11 +1,10 @@
+import { ConflictError } from '../../src/errors.js';
 import { randomUUID } from 'node:crypto';
 import type {
   CallEventRecord,
   CallSessionRecord,
   ControlCommandRecord,
-  DidFallbackRecord,
   NewCallSession,
-  ProvisioningOperationRecord,
   RuntimeStore,
 } from '../../src/runtime/store.js';
 
@@ -20,8 +19,6 @@ export class FakeRuntimeStore implements RuntimeStore {
   commands = new Map<string, ControlCommandRecord>();
   participants = new Map<string, Map<string, { identity?: string; kind: string; left: boolean }>>();
   deliveries = new Set<string>();
-  fallbacks = new Map<string, DidFallbackRecord>();
-  operations = new Map<string, ProvisioningOperationRecord>();
   dependencies = new Map<string, { ready: boolean; detail?: string }>();
   failOn: string | null = null;
   pingResult = true;
@@ -89,11 +86,19 @@ export class FakeRuntimeStore implements RuntimeStore {
 
   async claimControlCommand(
     command: ControlCommandRecord,
+    expectedVersion?: number,
+    requiredState?: string,
   ): Promise<{ claimed: boolean; existing?: ControlCommandRecord }> {
     this.guard('claimControlCommand');
     const key = `${command.callSessionId}|${command.idempotencyKey}`;
     const existing = this.commands.get(key);
     if (existing) return { claimed: false, existing };
+    const call = this.sessions.get(command.callSessionId);
+    if (call?.endedAt) throw new ConflictError('call has ended');
+    if (requiredState && call?.state !== requiredState && !(requiredState === 'screening' && ['admitted','agent-ready'].includes(call?.state ?? ''))) throw new ConflictError(call?.state === 'ringing' ? 'takeover_in_progress' : call?.state === 'human-active' ? 'already_taken' : 'call_not_screening');
+    if (requiredState && [...this.commands.values()].some(c => c.callSessionId === command.callSessionId && c.commandType === 'TAKEOVER' && c.status === 'in-progress')) throw new ConflictError('takeover_in_progress');
+    if (expectedVersion !== undefined && expectedVersion !== call?.version) throw new ConflictError('call version changed; refresh call state');
+    if (call) call.version++;
     this.commands.set(key, { ...command });
     return { claimed: true };
   }
@@ -130,31 +135,6 @@ export class FakeRuntimeStore implements RuntimeStore {
     if (this.deliveries.has(key)) return false;
     this.deliveries.add(key);
     return true;
-  }
-
-  async upsertDidFallback(record: DidFallbackRecord): Promise<void> {
-    this.guard('upsertDidFallback');
-    this.fallbacks.set(record.didRouteId, { ...record });
-  }
-
-  async getDidFallbackByDid(didE164: string): Promise<DidFallbackRecord | undefined> {
-    this.guard('getDidFallbackByDid');
-    for (const record of this.fallbacks.values()) {
-      if (record.didE164 === didE164) return record;
-    }
-    return undefined;
-  }
-
-  async getDidFallbackByRouteId(didRouteId: string): Promise<DidFallbackRecord | undefined> {
-    return this.fallbacks.get(didRouteId);
-  }
-
-  async recordProvisioningOperation(record: ProvisioningOperationRecord): Promise<void> {
-    this.operations.set(record.requestId, { ...record });
-  }
-
-  async getProvisioningOperation(requestId: string): Promise<ProvisioningOperationRecord | undefined> {
-    return this.operations.get(requestId);
   }
 
   async setDependencyStatus(name: string, ready: boolean, detail?: string): Promise<void> {

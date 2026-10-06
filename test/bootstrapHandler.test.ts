@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { FastAgiServer } from '../src/agi/fastAgiServer.js';
 import { createBootstrapHandler } from '../src/agi/bootstrapHandler.js';
-import type { BootstrapDecision, BootstrapRequest, CallOrchestrator } from '../src/orchestrator/callOrchestrator.js';
+import { nativePbxFallback, type BootstrapDecision, type BootstrapRequest, type BootstrapDecider } from '../src/agi/bootstrapHandler.js';
 import { FakeAsteriskCall } from './helpers/fakeAsteriskCall.js';
 import { captureLogger } from './helpers/capture.js';
 
@@ -24,7 +24,7 @@ const CHANNEL_VARS = {
 /**
  * Runs one fake inbound call against a FastAGI server whose orchestrator is
  * stubbed, so this suite covers the AGI variable contract exactly — the
- * routing decisions themselves are covered in callOrchestrator.test.ts.
+ * canonical native admission remains unavailable until PBX mapping is defined.
  */
 async function runCall(
   decide: (request: BootstrapRequest) => Promise<BootstrapDecision> | BootstrapDecision,
@@ -37,7 +37,7 @@ async function runCall(
       requests.push(request);
       return decide(request);
     },
-  } as unknown as CallOrchestrator;
+  } as unknown as BootstrapDecider;
 
   const server = new FastAgiServer({
     port: 0,
@@ -74,8 +74,11 @@ test('SCREEN sets the routing variables Asterisk needs to join LiveKit', async (
   assert.equal(call.setVars.get('AIDA_SIP_DESTINATION'), 'aida-cs-1@sip.livekit.test');
 
   assert.deepEqual(requests[0], {
-    officePulseInstanceId: 'op-primary',
+    officePulseInstanceId: 'op-env',
+    ingressContext: undefined,
+    fallbackQueue: undefined,
     asteriskLinkedId: '1756400100.42',
+    asteriskChannelId: CALL_ENV.agi_uniqueid,
     callerNumber: '15551230001',
     didE164: '15559870001',
   });
@@ -135,7 +138,7 @@ async function runCallWithEnv(env: Record<string, string>): Promise<{ requests: 
       requests.push(request);
       return { disposition: 'REJECT' };
     },
-  } as unknown as CallOrchestrator;
+  } as unknown as BootstrapDecider;
   const server = new FastAgiServer({
     port: 0,
     bind: '127.0.0.1',
@@ -156,3 +159,12 @@ async function runCallWithEnv(env: Record<string, string>): Promise<{ requests: 
   }
   return { requests };
 }
+
+test('canonical native fallback keeps PBX-owned destination variables without a config lookup', async () => {
+  const { call } = await runCall(nativePbxFallback.bootstrapInboundCall, {
+    ...CHANNEL_VARS, AIDA_FALLBACK_CONTEXT: 'pbx-owned', AIDA_FALLBACK_EXTENSION: 'support',
+  });
+  assert.equal(call.setVars.get('AIDA_DISPOSITION'), 'FALLBACK');
+  assert.equal(call.setVars.has('AIDA_FALLBACK_CONTEXT'), false);
+  assert.equal(call.setVars.has('AIDA_FALLBACK_EXTENSION'), false);
+});

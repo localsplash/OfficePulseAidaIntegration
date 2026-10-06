@@ -5,7 +5,7 @@ export interface AriChannel {
   name: string;
   state: string;
   caller?: { name?: string; number?: string };
-  dialplan?: { context?: string; exten?: string };
+  dialplan?: { context?: string; exten?: string; app_name?: string };
 }
 
 export interface AriBridge {
@@ -65,6 +65,7 @@ export type AriEvent =
   | (AriEventBase & Record<string, unknown>);
 
 export interface OriginateParams {
+  channelId?: string;
   endpoint: string;
   appArgs: string;
   callerId?: string;
@@ -79,6 +80,7 @@ export interface OriginateParams {
 export interface AriApi {
   originate(params: OriginateParams): Promise<AriChannel>;
   answer(channelId: string): Promise<void>;
+  continueInDialplan(channelId: string, context: string, exten: string): Promise<void>;
   hangup(channelId: string, reason?: string): Promise<void>;
   createBridge(type: string): Promise<AriBridge>;
   addToBridge(bridgeId: string, channelId: string): Promise<void>;

@@ -1,7 +1,7 @@
 {
   "name": "officepulse-aida-integration",
   "version": "0.1.0",
-  "description": "OfficePulse Aida integration service for LSAidaOffice01: FastAGI inbound bootstrap, ARI takeover/bridging, and Asterisk Realtime provisioning.",
+  "description": "OfficePulse private Asterisk inventory and observed-call diagnostic API.",
   "type": "module",
   "private": true,
   "engines": {
@@ -9,7 +9,7 @@
   },
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node scripts/write-build-info.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "npm run typecheck",
     "test": "node --import tsx --test \"test/**/*.test.ts\"",
@@ -17,11 +17,14 @@
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "validate:prompts": "tsx src/prompts/validateCli.ts prompts/manifest.json prompts/audio",
+    "pbx:adopt-queue": "tsx src/pbx/adoptQueueCli.ts",
     "simulate:agi": "tsx simulators/fake-asterisk-agi.ts",
     "simulate:ari": "tsx simulators/fake-ari-server.ts"
   },
   "dependencies": {
+    "@livekit/rtc-node": "1.0.0",
     "mysql2": "^3.11.0",
+    "swagger-ui-dist": "5.32.15",
     "ws": "^8.18.0"
   },
   "devDependencies": {

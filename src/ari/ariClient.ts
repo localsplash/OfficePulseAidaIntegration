@@ -125,6 +125,7 @@ export class AriClient extends EventEmitter implements AriApi {
     try {
       res = await this.fetchImpl(url, {
         method,
+        signal: AbortSignal.timeout(4000),
         headers: {
           authorization: `Basic ${auth}`,
           ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
@@ -148,8 +149,13 @@ export class AriClient extends EventEmitter implements AriApi {
       appArgs: params.appArgs,
     };
     if (params.callerId) query.callerId = params.callerId;
+    if (params.channelId) query.channelId = params.channelId;
     if (params.timeoutSeconds !== undefined) query.timeout = String(params.timeoutSeconds);
     return this.request<AriChannel>('POST', '/channels', query, params.variables ? { variables: params.variables } : undefined);
+  }
+
+  async continueInDialplan(channelId: string, context: string, exten: string): Promise<void> {
+    await this.request('POST', `/channels/${encodeURIComponent(channelId)}/continue`, { context, extension: exten, priority: '1' });
   }
 
   async answer(channelId: string): Promise<void> {

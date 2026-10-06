@@ -1,0 +1,3699 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "OfficePulse Integration API",
+    "version": "1.0.0",
+    "description": "Native Asterisk inventory and opt-in POC provisioning, integration call diagnostics and signed callbacks. Asterisk remains the PBX source of truth; provisioning writes its Realtime tables directly and keeps no desired-state copy. These docs are publicly readable; administrative requests remain restricted to trusted backends."
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "This OfficePulse API deployment"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Health"
+    },
+    {
+      "name": "Backend API"
+    },
+    {
+      "name": "Callbacks"
+    }
+  ],
+  "paths": {
+    "/v1/agent/calls/{callSessionId}/bootstrap": {
+      "post": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Consume one-time call bootstrap credentials",
+        "description": "Bootstrap v2. Requires native admission enabled. Verifies the intended dispatch and SIP identity/SID with LiveKit, re-derives route ownership for the pinned routing scope {pbxInstanceId, context} from Asterisk, checks the current profile assignment, and atomically consumes both credentials. The snapshot scope must equal the dispatch metadata scope. Always no-store; never retry an ambiguous response.",
+        "x-access-policy": "one-time-call-credentials",
+        "parameters": [
+          {
+            "name": "callSessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Authorization",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Bearer bootstrapToken from dispatch metadata. Not a staff credential."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "roomName",
+                  "sipParticipantIdentity",
+                  "sipParticipantSid",
+                  "routeToken"
+                ],
+                "properties": {
+                  "roomName": {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  "sipParticipantIdentity": {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  "sipParticipantSid": {
+                    "type": "string",
+                    "maxLength": 80
+                  },
+                  "routeToken": {
+                    "type": "string",
+                    "maxLength": 256,
+                    "minLength": 43,
+                    "pattern": "^[A-Za-z0-9_-]+$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authorized immutable profile; credentials consumed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "callSessionId",
+                    "roomName",
+                    "sipParticipantIdentity",
+                    "sipParticipantSid",
+                    "profileSnapshot"
+                  ],
+                  "properties": {
+                    "callSessionId": {
+                      "type": "string",
+                      "maxLength": 36
+                    },
+                    "roomName": {
+                      "type": "string",
+                      "maxLength": 120
+                    },
+                    "sipParticipantIdentity": {
+                      "type": "string",
+                      "maxLength": 120
+                    },
+                    "sipParticipantSid": {
+                      "type": "string",
+                      "maxLength": 80
+                    },
+                    "profileSnapshot": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "schemaVersion",
+                        "callSessionId",
+                        "pbxInstanceId",
+                        "context",
+                        "businessName",
+                        "prompt",
+                        "locale",
+                        "didE164"
+                      ],
+                      "properties": {
+                        "schemaVersion": {
+                          "type": "integer",
+                          "enum": [
+                            2
+                          ]
+                        },
+                        "callSessionId": {
+                          "type": "string",
+                          "maxLength": 36
+                        },
+                        "pbxInstanceId": {
+                          "type": "string",
+                          "maxLength": 80,
+                          "pattern": "^[A-Za-z0-9_.-]{1,80}$",
+                          "description": "Serving PBX instance; with context it is the routing scope and must equal the dispatch metadata."
+                        },
+                        "context": {
+                          "type": "string",
+                          "maxLength": 40,
+                          "pattern": "^[a-zA-Z0-9_.-]{1,40}$",
+                          "description": "Extension context owning the routed queue."
+                        },
+                        "tenantId": {
+                          "type": "string",
+                          "pattern": "^[1-9][0-9]*$",
+                          "description": "Optional customer identity for authorization/observation; never a routing key."
+                        },
+                        "businessName": {
+                          "type": "string",
+                          "maxLength": 256
+                        },
+                        "prompt": {
+                          "type": "string",
+                          "maxLength": 12000
+                        },
+                        "locale": {
+                          "type": "string",
+                          "enum": [
+                            "en-US"
+                          ]
+                        },
+                        "didE164": {
+                          "type": "string",
+                          "maxLength": 16,
+                          "pattern": "^\\+[1-9][0-9]{6,14}$"
+                        },
+                        "tone": {
+                          "type": "string",
+                          "maxLength": 256
+                        },
+                        "objective": {
+                          "type": "string",
+                          "maxLength": 2048
+                        },
+                        "openingStatement": {
+                          "type": "string",
+                          "maxLength": 2048
+                        },
+                        "transferStatement": {
+                          "type": "string",
+                          "maxLength": 2048
+                        },
+                        "failedTransferStatement": {
+                          "type": "string",
+                          "maxLength": 2048
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_request"
+          },
+          "401": {
+            "description": "credential_rejected"
+          },
+          "503": {
+            "description": "authority_unavailable"
+          }
+        }
+      }
+    },
+    "/v1/handset/attach": {
+      "post": {
+        "tags": [
+          "Handset"
+        ],
+        "summary": "Attach from the phone’s live SIP registration",
+        "parameters": [],
+        "x-access-policy": "sip-registration-network-match",
+        "security": [],
+        "description": "Trusted-office POC: same-network registration matching identifies an endpoint, not physical hardware. Exactly one unexpired contact must match. Failures echo only the submitted public/local addresses, never other endpoints. Token expires in 24 hours by default.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "appInstanceId",
+                  "localIps",
+                  "deviceModel",
+                  "appVersion"
+                ],
+                "properties": {
+                  "appInstanceId": {
+                    "type": "string",
+                    "maxLength": 128
+                  },
+                  "localIps": {
+                    "type": "array",
+                    "maxItems": 32,
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "deviceModel": {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  "appVersion": {
+                    "type": "string",
+                    "maxLength": 80
+                  },
+                  "claimedMac": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success or recorded replay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "token": {
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "device": {
+                      "$ref": "#/components/schemas/Handset"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Takeover accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or expired device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Registration no longer matches or backend is not admitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource is absent or outside device scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "stale_version, takeover_in_progress or already_taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Source address rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/handset/me": {
+      "get": {
+        "tags": [
+          "Handset"
+        ],
+        "summary": "Read device scope and public queue subscriptions",
+        "parameters": [],
+        "x-access-policy": "handset-bearer",
+        "security": [
+          {
+            "handsetBearer": []
+          }
+        ],
+        "description": "Responses use Cache-Control: no-store. Handset calls require matching PBX instance, context and native queue membership.",
+        "responses": {
+          "200": {
+            "description": "Success or recorded replay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "device": {
+                      "$ref": "#/components/schemas/Handset"
+                    },
+                    "queues": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "channel": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "pusher": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "cluster": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or expired device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Registration no longer matches or backend is not admitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource is absent or outside device scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "stale_version, takeover_in_progress or already_taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Source address rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/handset/calls": {
+      "get": {
+        "tags": [
+          "Handset"
+        ],
+        "summary": "List screening and ringing queue calls",
+        "parameters": [],
+        "x-access-policy": "handset-bearer",
+        "security": [
+          {
+            "handsetBearer": []
+          }
+        ],
+        "description": "Responses use Cache-Control: no-store. Handset calls require matching PBX instance, context and native queue membership.",
+        "responses": {
+          "200": {
+            "description": "Success or recorded replay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "calls": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/HandsetCall"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or expired device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Registration no longer matches or backend is not admitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource is absent or outside device scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "stale_version, takeover_in_progress or already_taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Source address rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/handset/calls/{id}": {
+      "get": {
+        "tags": [
+          "Handset"
+        ],
+        "summary": "Read call and issue a hidden observer token after rechecking registration",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "x-access-policy": "handset-bearer",
+        "security": [
+          {
+            "handsetBearer": []
+          }
+        ],
+        "description": "Responses use Cache-Control: no-store. Handset calls require matching PBX instance, context and native queue membership.",
+        "responses": {
+          "200": {
+            "description": "Success or recorded replay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "call": {
+                      "$ref": "#/components/schemas/HandsetCall"
+                    },
+                    "livekit": {
+                      "type": "object",
+                      "properties": {
+                        "url": {
+                          "type": "string"
+                        },
+                        "token": {
+                          "type": "string"
+                        },
+                        "expiresIn": {
+                          "type": "integer",
+                          "enum": [
+                            120
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or expired device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Registration no longer matches or backend is not admitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource is absent or outside device scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "stale_version, takeover_in_progress or already_taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Source address rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/handset/calls/{id}/takeover": {
+      "post": {
+        "tags": [
+          "Handset"
+        ],
+        "summary": "Ring only this handset with guarded auto-answer",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "x-access-policy": "handset-bearer",
+        "security": [
+          {
+            "handsetBearer": []
+          }
+        ],
+        "description": "Responses use Cache-Control: no-store. Handset calls require matching PBX instance, context and native queue membership.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "idempotencyKey",
+                  "expectedCallVersion"
+                ],
+                "properties": {
+                  "idempotencyKey": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "expectedCallVersion": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success or recorded replay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Takeover accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or expired device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Registration no longer matches or backend is not admitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource is absent or outside device scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "stale_version, takeover_in_progress or already_taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Source address rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/handset/logout": {
+      "post": {
+        "tags": [
+          "Handset"
+        ],
+        "summary": "Revoke this token and remove its room observer",
+        "parameters": [],
+        "x-access-policy": "handset-bearer",
+        "security": [
+          {
+            "handsetBearer": []
+          }
+        ],
+        "description": "Responses use Cache-Control: no-store. Handset calls require matching PBX instance, context and native queue membership.",
+        "responses": {
+          "200": {
+            "description": "Success or recorded replay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or expired device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Registration no longer matches or backend is not admitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource is absent or outside device scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "stale_version, takeover_in_progress or already_taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Source address rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/handsets": {
+      "get": {
+        "tags": [
+          "Backend API"
+        ],
+        "summary": "List attached handsets in one context",
+        "parameters": [
+          {
+            "name": "context",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.-]{1,40}$"
+            }
+          }
+        ],
+        "x-access-policy": "trusted-backend-network",
+        "description": "Responses use Cache-Control: no-store. Handset calls require matching PBX instance, context and native queue membership.",
+        "responses": {
+          "200": {
+            "description": "Success or recorded replay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "handsets": {
+                      "type": "array",
+                      "items": {
+                        "allOf": [
+                          {
+                            "$ref": "#/components/schemas/Handset"
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "deviceModel": {
+                                "type": "string"
+                              },
+                              "mac": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "publicIp": {
+                                "type": "string"
+                              },
+                              "localIp": {
+                                "type": "string"
+                              },
+                              "attachedAt": {
+                                "type": "string"
+                              },
+                              "lastSeenAt": {
+                                "type": "string"
+                              },
+                              "appVersion": {
+                                "type": "string"
+                              },
+                              "revokedAt": {
+                                "type": "string",
+                                "nullable": true
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or expired device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Registration no longer matches or backend is not admitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource is absent or outside device scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "stale_version, takeover_in_progress or already_taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Source address rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/handsets/{id}": {
+      "delete": {
+        "tags": [
+          "Backend API"
+        ],
+        "summary": "Revoke a handset session and remove it from rooms",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "context",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.-]{1,40}$"
+            }
+          }
+        ],
+        "x-access-policy": "trusted-backend-network",
+        "description": "Responses use Cache-Control: no-store. Handset calls require matching PBX instance, context and native queue membership.",
+        "responses": {
+          "200": {
+            "description": "Success or recorded replay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or expired device token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Registration no longer matches or backend is not admitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource is absent or outside device scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "stale_version, takeover_in_progress or already_taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Source address rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/healthz": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "summary": "Process health",
+        "responses": {
+          "200": {
+            "description": "Process is responding",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    },
+                    "pbxInstanceId": {
+                      "type": "string"
+                    },
+                    "environmentName": {
+                      "type": "string",
+                      "enum": [
+                        "dev",
+                        "staging",
+                        "prod"
+                      ]
+                    },
+                    "version": {
+                      "type": "string",
+                      "example": "2026.9.14.14.30",
+                      "description": "Pacific (America/Los_Angeles, PST/PDT) commit timestamp (YYYY.M.D.H.M); -dirty for uncommitted changes; unbuilt in source development mode"
+                    },
+                    "revision": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "Full Git commit ID"
+                    },
+                    "sourceUpdatedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "nullable": true,
+                      "description": "Commit time with Pacific UTC offset"
+                    },
+                    "timeZone": {
+                      "type": "string",
+                      "example": "America/Los_Angeles"
+                    },
+                    "dirty": {
+                      "type": "boolean",
+                      "nullable": true
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "summary": "Dependency readiness",
+        "description": "HTTP 200 means critical dependencies are ready. Inspect components.pbx-inventory separately. fullyOperational stays false when voice/native admission is unavailable. pbxInstanceId names the serving PBX instance so clients can pin the routing scope they administer.",
+        "responses": {
+          "200": {
+            "description": "Critical dependencies ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Readiness"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Critical dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Readiness"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/pbx/contexts": {
+      "get": {
+        "tags": [
+          "Backend API"
+        ],
+        "summary": "List the Asterisk contexts present on this PBX instance",
+        "description": "Private admitted backend network or Identity-authenticated Operations gateway (Super Admin). Distinct contexts from native endpoint and dialplan rows, without a context parameter. Feeds the AidaAdmin tenant form and the Operations context selector; listing a context grants nothing.",
+        "x-access-policy": "trusted-backend-network",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Distinct native contexts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContextInventory"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller not admitted or not authorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Retired iTenantId parameter supplied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database, schema or inventory unavailable, or more than 1000 contexts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/pbx/extensions": {
+      "get": {
+        "tags": [
+          "Backend API"
+        ],
+        "summary": "List native extensions of one context with managed-route detection",
+        "description": "Private admitted backend network or Identity-authenticated Operations gateway (Super Admin) with mutation CSRF. Ownership is derived from Asterisk records inside the requested context of this PBX instance. PBX mutations and DID reads require PBX_PROVISIONING_ENABLED=true plus dedicated writer credentials. Disabled mutation routes are absent. Credentials are returned only by extension creation; responses must not be cached.",
+        "x-access-policy": "trusted-backend-network",
+        "parameters": [
+          {
+            "name": "context",
+            "in": "query",
+            "required": true,
+            "description": "Exactly one Asterisk extension context on this PBX instance; duplicate values and the retired iTenantId parameter are rejected. A context name selects the scope and is never authorization by itself.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_.-]{1,40}$",
+              "maxLength": 40
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Scoped Asterisk records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtensionInventory"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller not admitted or not authorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Absent/other-context native object, or provisioning disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Duplicate object, remaining reference, manual or foreign route, or concurrent change; refresh and retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields, missing/duplicate context, retired iTenantId, or out-of-scope input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database, schema, ownership derivation, or provisioning unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Backend API"
+        ],
+        "summary": "Create an extension in this context; disclose SIP secret once",
+        "description": "Private admitted backend network or Identity-authenticated Operations gateway (Super Admin) with mutation CSRF. Ownership is derived from Asterisk records inside the requested context of this PBX instance. PBX mutations and DID reads require PBX_PROVISIONING_ENABLED=true plus dedicated writer credentials. Disabled mutation routes are absent. Credentials are returned only by extension creation; responses must not be cached.",
+        "x-access-policy": "trusted-backend-network",
+        "parameters": [
+          {
+            "name": "context",
+            "in": "query",
+            "required": true,
+            "description": "Exactly one Asterisk extension context on this PBX instance; duplicate values and the retired iTenantId parameter are rejected. A context name selects the scope and is never authorization by itself.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_.-]{1,40}$",
+              "maxLength": 40
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtensionCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Transaction committed; effective Asterisk state has not been verified",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtensionCreated"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller not admitted or not authorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Absent/other-context native object, or provisioning disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Duplicate object, remaining reference, manual or foreign route, or concurrent change; refresh and retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields, missing/duplicate context, retired iTenantId, or out-of-scope input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database, schema, ownership derivation, or provisioning unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/pbx/extensions/{extension}": {
+      "delete": {
+        "tags": [
+          "Backend API"
+        ],
+        "summary": "Delete the endpoint bundle dialed by this context's managed route, with its saved queue memberships",
+        "description": "Private admitted backend network or Identity-authenticated Operations gateway (Super Admin) with mutation CSRF. Ownership is derived from Asterisk records inside the requested context of this PBX instance. PBX mutations and DID reads require PBX_PROVISIONING_ENABLED=true plus dedicated writer credentials. Disabled mutation routes are absent. Credentials are returned only by extension creation; responses must not be cached.",
+        "x-access-policy": "trusted-backend-network",
+        "parameters": [
+          {
+            "name": "context",
+            "in": "query",
+            "required": true,
+            "description": "Exactly one Asterisk extension context on this PBX instance; duplicate values and the retired iTenantId parameter are rejected. A context name selects the scope and is never authorization by itself.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_.-]{1,40}$",
+              "maxLength": 40
+            }
+          },
+          {
+            "name": "extension",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{2,12}$"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Transaction committed; effective Asterisk state has not been verified"
+          },
+          "403": {
+            "description": "Caller not admitted or not authorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Absent/other-context native object, or provisioning disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Duplicate object, remaining reference, manual or foreign route, or concurrent change; refresh and retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields, missing/duplicate context, retired iTenantId, or out-of-scope input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database, schema, ownership derivation, or provisioning unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/pbx/queues": {
+      "get": {
+        "tags": [
+          "Backend API"
+        ],
+        "summary": "List queues owned by this context (exact ownership markers) and their members",
+        "description": "Private admitted backend network or Identity-authenticated Operations gateway (Super Admin) with mutation CSRF. Ownership is derived from Asterisk records inside the requested context of this PBX instance. PBX mutations and DID reads require PBX_PROVISIONING_ENABLED=true plus dedicated writer credentials. Disabled mutation routes are absent. Credentials are returned only by extension creation; responses must not be cached.",
+        "x-access-policy": "trusted-backend-network",
+        "parameters": [
+          {
+            "name": "context",
+            "in": "query",
+            "required": true,
+            "description": "Exactly one Asterisk extension context on this PBX instance; duplicate values and the retired iTenantId parameter are rejected. A context name selects the scope and is never authorization by itself.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_.-]{1,40}$",
+              "maxLength": 40
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Scoped Asterisk records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueInventory"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller not admitted or not authorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Absent/other-context native object, or provisioning disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Duplicate object, remaining reference, manual or foreign route, or concurrent change; refresh and retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields, missing/duplicate context, retired iTenantId, or out-of-scope input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database, schema, ownership derivation, or provisioning unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Backend API"
+        ],
+        "summary": "Create a queue from a friendly slug (native ID <context>.slug) or an owned legacy name",
+        "description": "Private admitted backend network or Identity-authenticated Operations gateway (Super Admin) with mutation CSRF. Ownership is derived from Asterisk records inside the requested context of this PBX instance. PBX mutations and DID reads require PBX_PROVISIONING_ENABLED=true plus dedicated writer credentials. Disabled mutation routes are absent. Credentials are returned only by extension creation; responses must not be cached.",
+        "x-access-policy": "trusted-backend-network",
+        "parameters": [
+          {
+            "name": "context",
+            "in": "query",
+            "required": true,
+            "description": "Exactly one Asterisk extension context on this PBX instance; duplicate values and the retired iTenantId parameter are rejected. A context name selects the scope and is never authorization by itself.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_.-]{1,40}$",
+              "maxLength": 40
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueueCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Transaction committed; effective Asterisk state has not been verified",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueCreated"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller not admitted or not authorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Absent/other-context native object, or provisioning disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Duplicate object, remaining reference, manual or foreign route, or concurrent change; refresh and retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields, missing/duplicate context, retired iTenantId, or out-of-scope input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database, schema, ownership derivation, or provisioning unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/pbx/queues/{queue}": {
+      "delete": {
+        "tags": [
+          "Backend API"
+        ],
+        "summary": "Delete an owned queue and members; conflict while a DID references it",
+        "description": "Private admitted backend network or Identity-authenticated Operations gateway (Super Admin) with mutation CSRF. Ownership is derived from Asterisk records inside the requested context of this PBX instance. PBX mutations and DID reads require PBX_PROVISIONING_ENABLED=true plus dedicated writer credentials. Disabled mutation routes are absent. Credentials are returned only by extension creation; responses must not be cached.",
+        "x-access-policy": "trusted-backend-network",
+        "parameters": [
+          {
+            "name": "context",
+            "in": "query",
+            "required": true,
+            "description": "Exactly one Asterisk extension context on this PBX instance; duplicate values and the retired iTenantId parameter are rejected. A context name selects the scope and is never authorization by itself.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_.-]{1,40}$",
+              "maxLength": 40
+            }
+          },
+          {
+            "name": "queue",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_.-]{1,80}$",
+              "maxLength": 80
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Transaction committed; effective Asterisk state has not been verified"
+          },
+          "403": {
+            "description": "Caller not admitted or not authorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Absent/other-context native object, or provisioning disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Duplicate object, remaining reference, manual or foreign route, or concurrent change; refresh and retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields, missing/duplicate context, retired iTenantId, or out-of-scope input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database, schema, ownership derivation, or provisioning unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/pbx/queues/{queue}/extensions/{extension}": {
+      "put": {
+        "tags": [
+          "Backend API"
+        ],
+        "summary": "Idempotently set an owned queue member resolved from this context's managed route",
+        "description": "Private admitted backend network or Identity-authenticated Operations gateway (Super Admin) with mutation CSRF. Ownership is derived from Asterisk records inside the requested context of this PBX instance. PBX mutations and DID reads require PBX_PROVISIONING_ENABLED=true plus dedicated writer credentials. Disabled mutation routes are absent. Credentials are returned only by extension creation; responses must not be cached.",
+        "x-access-policy": "trusted-backend-network",
+        "parameters": [
+          {
+            "name": "context",
+            "in": "query",
+            "required": true,
+            "description": "Exactly one Asterisk extension context on this PBX instance; duplicate values and the retired iTenantId parameter are rejected. A context name selects the scope and is never authorization by itself.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_.-]{1,40}$",
+              "maxLength": 40
+            }
+          },
+          {
+            "name": "queue",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_.-]{1,80}$",
+              "maxLength": 80
+            }
+          },
+          {
+            "name": "extension",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{2,12}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueueMemberInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Transaction committed; effective Asterisk state has not been verified",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueMemberSaved"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller not admitted or not authorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Absent/other-context native object, or provisioning disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Duplicate object, remaining reference, manual or foreign route, or concurrent change; refresh and retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields, missing/duplicate context, retired iTenantId, or out-of-scope input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database, schema, ownership derivation, or provisioning unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Backend API"
+        ],
+        "summary": "Delete one owned saved membership",
+        "description": "Private admitted backend network or Identity-authenticated Operations gateway (Super Admin) with mutation CSRF. Ownership is derived from Asterisk records inside the requested context of this PBX instance. PBX mutations and DID reads require PBX_PROVISIONING_ENABLED=true plus dedicated writer credentials. Disabled mutation routes are absent. Credentials are returned only by extension creation; responses must not be cached.",
+        "x-access-policy": "trusted-backend-network",
+        "parameters": [
+          {
+            "name": "context",
+            "in": "query",
+            "required": true,
+            "description": "Exactly one Asterisk extension context on this PBX instance; duplicate values and the retired iTenantId parameter are rejected. A context name selects the scope and is never authorization by itself.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_.-]{1,40}$",
+              "maxLength": 40
+            }
+          },
+          {
+            "name": "queue",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_.-]{1,80}$",
+              "maxLength": 80
+            }
+          },
+          {
+            "name": "extension",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{2,12}$"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Transaction committed; effective Asterisk state has not been verified"
+          },
+          "403": {
+            "description": "Caller not admitted or not authorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Absent/other-context native object, or provisioning disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Duplicate object, remaining reference, manual or foreign route, or concurrent change; refresh and retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields, missing/duplicate context, retired iTenantId, or out-of-scope input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database, schema, ownership derivation, or provisioning unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/pbx/dids": {
+      "get": {
+        "tags": [
+          "Backend API"
+        ],
+        "summary": "Read managed routes owned by this context; identify foreign, manual and unconfigured Identity Numbers explicitly",
+        "description": "Private admitted backend network. AidaAdmin revalidates Identity tenant access, resolves the tenant's extension and DID ingress contexts, and supplies the current tenant Number assignments. DID routes are excluded from the browser Operations gateway. PBX mutations and DID reads require PBX_PROVISIONING_ENABLED=true plus dedicated writer credentials.",
+        "x-access-policy": "trusted-backend-network",
+        "parameters": [
+          {
+            "name": "context",
+            "in": "query",
+            "required": true,
+            "description": "Exactly one Asterisk extension context on this PBX instance; duplicate values and the retired iTenantId parameter are rejected. A context name selects the scope and is never authorization by itself.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_.-]{1,40}$",
+              "maxLength": 40
+            }
+          },
+          {
+            "name": "didContext",
+            "in": "query",
+            "required": true,
+            "description": "Exactly one carrier ingress context holding the managed DID routes; it must differ from context.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_.-]{1,40}$",
+              "maxLength": 40
+            }
+          },
+          {
+            "name": "authorizedDid",
+            "in": "query",
+            "required": true,
+            "description": "Repeatable globally unique E.164 Number freshly authorized for the requesting tenant by Identity through the trusted AidaAdmin backend.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\+[1-9][0-9]{6,14}$",
+              "example": "+19496501147"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Scoped Asterisk records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DidInventory"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller not admitted or not authorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Absent/other-context native object, or provisioning disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Duplicate object, remaining reference, manual or foreign route, or concurrent change; refresh and retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields, missing/duplicate context, retired iTenantId, or out-of-scope input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database, schema, ownership derivation, or provisioning unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/pbx/dids/{did}": {
+      "put": {
+        "tags": [
+          "Backend API"
+        ],
+        "summary": "Set queue hours and ring budget before LiveKit; refuse manual or foreign route adoption",
+        "description": "Private admitted backend network. AidaAdmin revalidates Identity tenant access, resolves the tenant's extension and DID ingress contexts, and supplies the current tenant Number assignments. DID routes are excluded from the browser Operations gateway. PBX mutations and DID reads require PBX_PROVISIONING_ENABLED=true plus dedicated writer credentials.",
+        "x-access-policy": "trusted-backend-network",
+        "parameters": [
+          {
+            "name": "context",
+            "in": "query",
+            "required": true,
+            "description": "Exactly one Asterisk extension context on this PBX instance; duplicate values and the retired iTenantId parameter are rejected. A context name selects the scope and is never authorization by itself.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_.-]{1,40}$",
+              "maxLength": 40
+            }
+          },
+          {
+            "name": "didContext",
+            "in": "query",
+            "required": true,
+            "description": "Exactly one carrier ingress context holding the managed DID routes; it must differ from context.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_.-]{1,40}$",
+              "maxLength": 40
+            }
+          },
+          {
+            "name": "authorizedDid",
+            "in": "query",
+            "required": true,
+            "description": "Repeatable globally unique E.164 Number freshly authorized for the requesting tenant by Identity through the trusted AidaAdmin backend.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\+[1-9][0-9]{6,14}$",
+              "example": "+19496501147"
+            }
+          },
+          {
+            "name": "did",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\\+[1-9][0-9]{6,14}$",
+              "example": "+19496501147"
+            },
+            "description": "Exact Identity-assigned E.164 DID. URL encode the plus as %2B."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DidSettings"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Transaction committed; effective Asterisk state has not been verified",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagedDid"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller not admitted or not authorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Absent/other-context native object, or provisioning disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Duplicate object, remaining reference, manual or foreign route, or concurrent change; refresh and retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields, missing/duplicate context, retired iTenantId, or out-of-scope input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database, schema, ownership derivation, or provisioning unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Backend API"
+        ],
+        "summary": "Delete recognized managed Realtime rows owned by this context; retain Identity number assignment",
+        "description": "Private admitted backend network. AidaAdmin revalidates Identity tenant access, resolves the tenant's extension and DID ingress contexts, and supplies the current tenant Number assignments. DID routes are excluded from the browser Operations gateway. PBX mutations and DID reads require PBX_PROVISIONING_ENABLED=true plus dedicated writer credentials.",
+        "x-access-policy": "trusted-backend-network",
+        "parameters": [
+          {
+            "name": "context",
+            "in": "query",
+            "required": true,
+            "description": "Exactly one Asterisk extension context on this PBX instance; duplicate values and the retired iTenantId parameter are rejected. A context name selects the scope and is never authorization by itself.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_.-]{1,40}$",
+              "maxLength": 40
+            }
+          },
+          {
+            "name": "didContext",
+            "in": "query",
+            "required": true,
+            "description": "Exactly one carrier ingress context holding the managed DID routes; it must differ from context.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_.-]{1,40}$",
+              "maxLength": 40
+            }
+          },
+          {
+            "name": "authorizedDid",
+            "in": "query",
+            "required": true,
+            "description": "Repeatable globally unique E.164 Number freshly authorized for the requesting tenant by Identity through the trusted AidaAdmin backend.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\+[1-9][0-9]{6,14}$",
+              "example": "+19496501147"
+            }
+          },
+          {
+            "name": "did",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\\+[1-9][0-9]{6,14}$",
+              "example": "+19496501147"
+            },
+            "description": "Exact Identity-assigned E.164 DID. URL encode the plus as %2B."
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Transaction committed; effective Asterisk state has not been verified"
+          },
+          "403": {
+            "description": "Caller not admitted or not authorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Absent/other-context native object, or provisioning disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Duplicate object, remaining reference, manual or foreign route, or concurrent change; refresh and retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid fields, missing/duplicate context, retired iTenantId, or out-of-scope input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database, schema, ownership derivation, or provisioning unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/calls/{id}": {
+      "get": {
+        "tags": [
+          "Backend API"
+        ],
+        "summary": "Read an observed integration call",
+        "description": "Restricted to trusted application backends. A browser session, API key or bearer token does not bypass the network admission policy. AidaAdmin and the operations UI authenticate their human users separately.",
+        "x-access-policy": "trusted-backend-network",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Call"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admitted backend",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency or native scope unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/calls/{id}/events": {
+      "get": {
+        "tags": [
+          "Backend API"
+        ],
+        "summary": "Read integration call events",
+        "description": "Restricted to trusted application backends. A browser session, API key or bearer token does not bypass the network admission policy. AidaAdmin and the operations UI authenticate their human users separately.",
+        "x-access-policy": "trusted-backend-network",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Event"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not an admitted backend",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency or native scope unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/calls/{id}/commands": {
+      "post": {
+        "tags": [
+          "Backend API"
+        ],
+        "summary": "Submit an integration call command",
+        "description": "Restricted to trusted application backends. A browser session, API key or bearer token does not bypass the network admission policy. AidaAdmin and the operations UI authenticate their human users separately. Requires VOICE_ENABLED=true. DRAIN_ACK is supported; TAKEOVER returns 503 until native destination admission exists. Dev returns voice_unavailable before executing commands.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "x-access-policy": "trusted-backend-network",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "commandType",
+                  "idempotencyKey"
+                ],
+                "properties": {
+                  "commandType": {
+                    "type": "string",
+                    "enum": [
+                      "DRAIN_ACK",
+                      "TAKEOVER"
+                    ]
+                  },
+                  "idempotencyKey": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "expectedCallVersion": {
+                    "type": "integer"
+                  },
+                  "destinationType": {
+                    "type": "string",
+                    "enum": [
+                      "EXTENSION",
+                      "QUEUE"
+                    ]
+                  },
+                  "destinationId": {
+                    "type": "string"
+                  },
+                  "ringTimeoutSeconds": {
+                    "type": "number"
+                  },
+                  "musicOnHoldClass": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Previously recorded command result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Command accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Call not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict or previously failed command",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid command",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Voice or native destination unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/integrations/livekit/webhooks": {
+      "post": {
+        "tags": [
+          "Callbacks"
+        ],
+        "summary": "Receive a signed LiveKit webhook",
+        "description": "Preserve the original request bytes and LiveKit Authorization header. Signature verification authenticates this callback when voice is enabled. With voice disabled, returns 503.",
+        "parameters": [
+          {
+            "name": "Authorization",
+            "in": "header",
+            "required": true,
+            "description": "LiveKit-generated webhook signature; not a staff login token.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/webhook+json": {
+              "schema": {
+                "type": "object",
+                "description": "Original LiveKit webhook event payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Verified webhook outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Signature rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Voice disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "handsetBearer": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
+    "schemas": {
+      "Handset": {
+        "type": "object",
+        "required": [
+          "id",
+          "pbxInstanceId",
+          "context",
+          "endpointId",
+          "extension"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "pbxInstanceId": {
+            "type": "string"
+          },
+          "context": {
+            "type": "string"
+          },
+          "endpointId": {
+            "type": "string"
+          },
+          "extension": {
+            "type": "string",
+            "nullable": true
+          },
+          "label": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "HandsetCall": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "screening",
+              "ringing",
+              "human-active",
+              "fallback",
+              "ended"
+            ]
+          },
+          "version": {
+            "type": "integer"
+          },
+          "queue": {
+            "type": "string"
+          },
+          "callerNumber": {
+            "type": "string"
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "agentParticipantSid": {
+            "type": "string"
+          },
+          "takeover": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "busy",
+                  "rejected",
+                  "no-answer",
+                  "failed"
+                ]
+              },
+              "mine": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "Readiness": {
+        "type": "object",
+        "properties": {
+          "environmentName": {
+            "type": "string",
+            "enum": [
+              "dev",
+              "staging",
+              "prod"
+            ]
+          },
+          "pbxInstanceId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.-]{1,80}$"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "fullyOperational": {
+            "type": "boolean"
+          },
+          "components": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "ready": {
+                  "type": "boolean"
+                },
+                "criticality": {
+                  "type": "string",
+                  "enum": [
+                    "critical",
+                    "degraded"
+                  ]
+                },
+                "detail": {
+                  "type": "string"
+                },
+                "since": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              }
+            }
+          }
+        }
+      },
+      "ApplyState": {
+        "type": "string",
+        "enum": [
+          "committed",
+          "active",
+          "unknown"
+        ],
+        "description": "This implementation returns committed after a transaction and unknown for native inventory. It does not verify effective Asterisk state or return active."
+      },
+      "ContextInventory": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source",
+          "pbxInstanceId",
+          "contexts"
+        ],
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "asterisk"
+            ]
+          },
+          "pbxInstanceId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.-]{1,80}$",
+            "maxLength": 80,
+            "description": "OFFICEPULSE_INSTANCE_ID of the serving PBX instance. Routing scope is {pbxInstanceId, context}."
+          },
+          "contexts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Sorted, case-sensitive distinct contexts from ps_endpoints and extensions."
+          }
+        }
+      },
+      "Extension": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "extension",
+          "context",
+          "callerId",
+          "transport",
+          "aors",
+          "managed",
+          "applyState"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "extension": {
+            "type": "string",
+            "nullable": true,
+            "description": "Dialable number from the managed Dial route in this context. Without one, the legacy <digits>-t<N> or pure-digit id yields its digits; otherwise null."
+          },
+          "context": {
+            "type": "string"
+          },
+          "callerId": {
+            "type": "string",
+            "nullable": true
+          },
+          "transport": {
+            "type": "string",
+            "nullable": true
+          },
+          "aors": {
+            "type": "string",
+            "nullable": true
+          },
+          "managed": {
+            "type": "boolean",
+            "description": "True when the endpoint has the managed Dial route in this context; imported endpoints are false. Deleting through this API additionally requires the route's Hangup row to be intact (409 otherwise)."
+          },
+          "applyState": {
+            "type": "string",
+            "enum": [
+              "committed",
+              "active",
+              "unknown"
+            ],
+            "description": "This implementation returns committed after a transaction and unknown for native inventory. It does not verify effective Asterisk state or return active."
+          }
+        }
+      },
+      "ExtensionInventory": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source",
+          "pbxInstanceId",
+          "context",
+          "provisioningEnabled",
+          "contexts",
+          "extensions"
+        ],
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "asterisk"
+            ]
+          },
+          "pbxInstanceId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.-]{1,80}$",
+            "maxLength": 80,
+            "description": "OFFICEPULSE_INSTANCE_ID of the serving PBX instance. Routing scope is {pbxInstanceId, context}."
+          },
+          "context": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_.-]{1,40}$",
+            "maxLength": 40
+          },
+          "provisioningEnabled": {
+            "type": "boolean"
+          },
+          "contexts": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_.-]{1,40}$",
+              "maxLength": 40
+            }
+          },
+          "extensions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Extension"
+            }
+          }
+        }
+      },
+      "ExtensionCreate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "extension"
+        ],
+        "properties": {
+          "extension": {
+            "type": "string",
+            "pattern": "^[0-9]{2,12}$"
+          },
+          "context": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_.-]{1,40}$",
+            "maxLength": 40,
+            "description": "Optional; when present it must equal the context query."
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 33,
+            "description": "No quotes, angle brackets, backslashes or control characters. The formatted caller ID must fit the installed 40-character column."
+          },
+          "callerIdNumber": {
+            "type": "string",
+            "pattern": "^\\+[1-9][0-9]{6,14}$",
+            "example": "+19496501147"
+          }
+        }
+      },
+      "ExtensionCreated": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "extension",
+          "sipUsername",
+          "sipSecret",
+          "applyState"
+        ],
+        "properties": {
+          "extension": {
+            "type": "string"
+          },
+          "sipUsername": {
+            "type": "string",
+            "description": "Endpoint/auth/AOR id <extension>-<context>, at most 40 characters."
+          },
+          "sipSecret": {
+            "type": "string",
+            "description": "One-time disclosure. Never logged, cached, persisted by AidaAdmin, or returned by inventory/replays."
+          },
+          "applyState": {
+            "type": "string",
+            "enum": [
+              "committed",
+              "active",
+              "unknown"
+            ],
+            "description": "This implementation returns committed after a transaction and unknown for native inventory. It does not verify effective Asterisk state or return active."
+          }
+        }
+      },
+      "Queue": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "strategy",
+          "applyState",
+          "members"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "strategy": {
+            "type": "string",
+            "nullable": true
+          },
+          "applyState": {
+            "type": "string",
+            "enum": [
+              "committed",
+              "active",
+              "unknown"
+            ],
+            "description": "This implementation returns committed after a transaction and unknown for native inventory. It does not verify effective Asterisk state or return active."
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "interface",
+                "memberName",
+                "penalty",
+                "paused"
+              ],
+              "properties": {
+                "interface": {
+                  "type": "string"
+                },
+                "memberName": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "penalty": {
+                  "type": "integer"
+                },
+                "paused": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      },
+      "QueueInventory": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source",
+          "pbxInstanceId",
+          "context",
+          "provisioningEnabled",
+          "queues"
+        ],
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "asterisk"
+            ]
+          },
+          "pbxInstanceId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.-]{1,80}$",
+            "maxLength": 80,
+            "description": "OFFICEPULSE_INSTANCE_ID of the serving PBX instance. Routing scope is {pbxInstanceId, context}."
+          },
+          "context": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_.-]{1,40}$",
+            "maxLength": 40
+          },
+          "provisioningEnabled": {
+            "type": "boolean"
+          },
+          "queues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Queue"
+            }
+          }
+        }
+      },
+      "QueueCreate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_.-]{1,80}$",
+            "maxLength": 80,
+            "description": "Friendly slug up to 60 characters (native ID <context>.<slug>, at most 80 characters), or the exact name of a legacy queue this context already owns."
+          },
+          "strategy": {
+            "type": "string",
+            "enum": [
+              "ringall",
+              "leastrecent",
+              "fewestcalls",
+              "random",
+              "rrmemory",
+              "linear",
+              "wrandom"
+            ],
+            "default": "ringall"
+          }
+        }
+      },
+      "QueueCreated": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "strategy",
+          "applyState"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "strategy": {
+            "type": "string",
+            "enum": [
+              "ringall",
+              "leastrecent",
+              "fewestcalls",
+              "random",
+              "rrmemory",
+              "linear",
+              "wrandom"
+            ]
+          },
+          "applyState": {
+            "type": "string",
+            "enum": [
+              "committed",
+              "active",
+              "unknown"
+            ],
+            "description": "This implementation returns committed after a transaction and unknown for native inventory. It does not verify effective Asterisk state or return active."
+          }
+        }
+      },
+      "QueueMemberInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [],
+        "properties": {
+          "context": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_.-]{1,40}$",
+            "maxLength": 40,
+            "description": "Optional; when present it must equal the context query."
+          },
+          "penalty": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "default": 0
+          },
+          "paused": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "QueueMemberSaved": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "queue",
+          "extension",
+          "penalty",
+          "paused",
+          "applyState"
+        ],
+        "properties": {
+          "queue": {
+            "type": "string"
+          },
+          "extension": {
+            "type": "string"
+          },
+          "penalty": {
+            "type": "integer"
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "applyState": {
+            "type": "string",
+            "enum": [
+              "committed",
+              "active",
+              "unknown"
+            ],
+            "description": "This implementation returns committed after a transaction and unknown for native inventory. It does not verify effective Asterisk state or return active."
+          }
+        }
+      },
+      "DidSchedule": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "timeRange",
+          "weekdays",
+          "timezone"
+        ],
+        "properties": {
+          "timeRange": {
+            "type": "string",
+            "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]-(?:[01][0-9]|2[0-3]):[0-5][0-9]$",
+            "example": "09:00-17:00"
+          },
+          "weekdays": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Asterisk day names, & separated and optional ranges. Ranges normalize to a unique ordered sun..sat list.",
+            "example": "mon-fri"
+          },
+          "timezone": {
+            "type": "string",
+            "maxLength": 64,
+            "description": "Required valid IANA timezone, including UTC.",
+            "example": "America/Los_Angeles"
+          }
+        }
+      },
+      "DidSettings": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "queue",
+          "ringsBeforeAi"
+        ],
+        "properties": {
+          "queue": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_.-]{1,80}$",
+            "maxLength": 80
+          },
+          "ringsBeforeAi": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 12,
+            "description": "Approximately five seconds per ring."
+          },
+          "schedule": {
+            "$ref": "#/components/schemas/DidSchedule",
+            "nullable": true
+          },
+          "livekitDestination": {
+            "type": "string",
+            "pattern": "^\\+[1-9][0-9]{6,14}$",
+            "example": "+19496501147",
+            "description": "Defaults to the DID. The PJSIP provider endpoint is always livekit."
+          }
+        }
+      },
+      "ManagedDid": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "did",
+          "managed",
+          "queue",
+          "ringsBeforeAi",
+          "livekitDestination",
+          "ringTimeoutSeconds",
+          "applyState"
+        ],
+        "properties": {
+          "did": {
+            "type": "string",
+            "pattern": "^\\+[1-9][0-9]{6,14}$",
+            "example": "+19496501147"
+          },
+          "managed": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "queue": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_.-]{1,80}$",
+            "maxLength": 80
+          },
+          "ringsBeforeAi": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 12
+          },
+          "schedule": {
+            "$ref": "#/components/schemas/DidSchedule"
+          },
+          "livekitDestination": {
+            "type": "string",
+            "pattern": "^\\+[1-9][0-9]{6,14}$",
+            "example": "+19496501147"
+          },
+          "ringTimeoutSeconds": {
+            "type": "integer",
+            "minimum": 5,
+            "maximum": 60
+          },
+          "applyState": {
+            "type": "string",
+            "enum": [
+              "committed",
+              "active",
+              "unknown"
+            ],
+            "description": "This implementation returns committed after a transaction and unknown for native inventory. It does not verify effective Asterisk state or return active."
+          }
+        }
+      },
+      "UnmanagedDid": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "did",
+          "managed",
+          "availability",
+          "applyState"
+        ],
+        "properties": {
+          "did": {
+            "type": "string",
+            "pattern": "^\\+[1-9][0-9]{6,14}$",
+            "example": "+19496501147"
+          },
+          "managed": {
+            "type": "boolean",
+            "enum": [
+              false
+            ]
+          },
+          "availability": {
+            "type": "string",
+            "enum": [
+              "unconfigured",
+              "manual"
+            ],
+            "description": "manual: rows exist that are unrecognized or route to a queue another context owns; unconfigured: no rows."
+          },
+          "applyState": {
+            "type": "string",
+            "enum": [
+              "unknown"
+            ]
+          }
+        }
+      },
+      "DidInventory": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source",
+          "pbxInstanceId",
+          "context",
+          "provisioningEnabled",
+          "didContext",
+          "dids"
+        ],
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "asterisk"
+            ]
+          },
+          "pbxInstanceId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.-]{1,80}$",
+            "maxLength": 80,
+            "description": "OFFICEPULSE_INSTANCE_ID of the serving PBX instance. Routing scope is {pbxInstanceId, context}."
+          },
+          "context": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_.-]{1,40}$",
+            "maxLength": 40
+          },
+          "provisioningEnabled": {
+            "type": "boolean"
+          },
+          "didContext": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_.-]{1,40}$",
+            "maxLength": 40
+          },
+          "dids": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/ManagedDid"
+                },
+                {
+                  "$ref": "#/components/schemas/UnmanagedDid"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "Call": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "asteriskLinkedId": {
+            "type": "string"
+          },
+          "officePulseInstanceId": {
+            "type": "string"
+          },
+          "pbxContext": {
+            "type": "string",
+            "description": "Extension context owning the routed queue; with officePulseInstanceId it is the routing scope."
+          },
+          "ingressContext": {
+            "type": "string",
+            "description": "Carrier ingress context the DID arrived in."
+          },
+          "tenantId": {
+            "type": "string",
+            "description": "Customer identity for authorization and observation, never a routing key."
+          },
+          "callerNumber": {
+            "type": "string"
+          },
+          "didE164": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "disposition": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "config": {
+            "type": "object"
+          },
+          "roomName": {
+            "type": "string"
+          },
+          "destinationType": {
+            "type": "string"
+          },
+          "destinationId": {
+            "type": "string"
+          }
+        }
+      },
+      "Event": {
+        "type": "object",
+        "properties": {
+          "sequenceNumber": {
+            "type": "integer"
+          },
+          "eventType": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    }
+  }
+}

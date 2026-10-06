@@ -1,4 +1,5 @@
-import type { DestinationType } from '../nocodb/configRepository.js';
+// Observed historical destination labels are diagnostic data, never new routing intent.
+export type DestinationType = string;
 
 /**
  * The `aidacalls_db` runtime database this service exclusively writes
@@ -19,6 +20,11 @@ export interface CallSessionRecord {
   id: string;
   asteriskLinkedId: string;
   officePulseInstanceId: string;
+  /** Extension context owning the routed queue; with officePulseInstanceId it is the call's routing scope (#22). */
+  pbxContext?: string;
+  /** Carrier ingress context the DID arrived in; pinned so ownership can be re-derived from the DID's own rows. */
+  ingressContext?: string;
+  /** Customer identity for authorization and observation, never a routing key. */
   tenantId: string;
   didE164: string;
   callerNumber?: string;
@@ -38,6 +44,8 @@ export interface NewCallSession {
   id: string;
   asteriskLinkedId: string;
   officePulseInstanceId: string;
+  pbxContext?: string;
+  ingressContext?: string;
   tenantId: string;
   didE164: string;
   callerNumber?: string;
@@ -65,22 +73,6 @@ export interface ControlCommandRecord {
   result?: Record<string, unknown>;
 }
 
-export interface DidFallbackRecord {
-  didRouteId: string;
-  tenantId: string;
-  didE164: string;
-  destinationType: DestinationType;
-  destinationId: string;
-  enabled: boolean;
-}
-
-export interface ProvisioningOperationRecord {
-  requestId: string;
-  kind: string;
-  externalId: string;
-  action: string;
-  status: string;
-}
 
 /** Validated LiveKit delivery; receipts and all projections commit together. */
 export interface LiveKitWebhookUpdate {
@@ -115,7 +107,7 @@ export interface RuntimeStore {
   /** Durable lifecycle projection and receipt in one transaction (production store). */
   applyCallEvent?(callSessionId: string, event: {
     eventType: string; occurredAt: string; idempotencyKey: string; payload?: Record<string, unknown>;
-  }, state?: string): Promise<void>;
+  }, state?: string): Promise<{ stateChanged: boolean; state?: string }>;
 
   /**
    * Claim a command by (session, idempotency key). `claimed: false` means
@@ -124,6 +116,7 @@ export interface RuntimeStore {
   claimControlCommand(
     command: ControlCommandRecord,
     expectedVersion?: number,
+    requiredState?: string,
   ): Promise<{ claimed: boolean; existing?: ControlCommandRecord }>;
   completeControlCommand(
     callSessionId: string,
@@ -150,12 +143,6 @@ export interface RuntimeStore {
     callSessionId?: string,
   ): Promise<boolean>;
 
-  upsertDidFallback(record: DidFallbackRecord): Promise<void>;
-  getDidFallbackByDid(didE164: string): Promise<DidFallbackRecord | undefined>;
-  getDidFallbackByRouteId(didRouteId: string): Promise<DidFallbackRecord | undefined>;
-
-  recordProvisioningOperation(record: ProvisioningOperationRecord): Promise<void>;
-  getProvisioningOperation(requestId: string): Promise<ProvisioningOperationRecord | undefined>;
 
   setDependencyStatus(name: string, ready: boolean, detail?: string): Promise<void>;
 

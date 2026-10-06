@@ -1,5 +1,5 @@
 [Unit]
-Description=OfficePulse Aida Integration (FastAGI, ARI takeover, Realtime provisioning)
+Description=OfficePulse integration API, native PBX inventory/provisioning and operations UI
 After=network-online.target
 Wants=network-online.target
 
@@ -21,9 +21,16 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
+# Handset request body log; the service deletes day files older than 14 days.
+LogsDirectory=officepulse-aida-integration
+LogsDirectoryMode=0750
 ProtectKernelTunables=true
 ProtectControlGroups=true
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# AF_NETLINK is required: libwebrtc (@livekit/rtc-node) enumerates network
+# interfaces over netlink while gathering ICE candidates for the Agent room
+# monitor. Without it only the first room connection in the process succeeds
+# and every later call falls back at monitor-connect (issue #19).
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 MemoryMax=512M
 
 [Install]

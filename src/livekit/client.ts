@@ -1,3 +1,5 @@
+import type { Participant } from '../agent/authority.js';
+import type { DispatchMetadata } from '../agent/contract.js';
 import type { Logger } from '../logging/logger.js';
 import { UpstreamError } from '../errors.js';
 import { signAccessToken } from './token.js';
@@ -36,9 +38,10 @@ export interface DispatchResult {
 
 export interface LiveKitApi {
   createRoom(roomName: string): Promise<void>;
+  deleteRoom(roomName: string): Promise<void>;
   dispatchAidaPrime(roomName: string, metadata: CallMetadata): Promise<DispatchResult>;
   publishData(roomName: string, topic: string, payload: Record<string, unknown>): Promise<void>;
-  listParticipants(roomName: string): Promise<Array<{ sid: string; identity: string; kind?: string }>>;
+  listParticipants(roomName: string): Promise<Participant[]>;
   ping(): Promise<boolean>;
 }
 
@@ -103,6 +106,7 @@ export class LiveKitClient implements LiveKitApi {
     try {
       const res = await this.fetchImpl(`${this.base}/twirp/livekit.${service}/${method}`, {
         method: 'POST',
+        redirect: 'error',
         headers: {
           authorization: `Bearer ${this.token(video)}`,
           'content-type': 'application/json',
@@ -135,6 +139,10 @@ export class LiveKitClient implements LiveKitApi {
     );
   }
 
+  async deleteRoom(roomName: string): Promise<void> {
+    await this.twirp('RoomService', 'DeleteRoom', { room: roomName }, { roomCreate: true });
+  }
+
   async dispatchAidaPrime(roomName: string, metadata: CallMetadata): Promise<DispatchResult> {
     const result = (await this.twirp(
       'AgentDispatchService',
@@ -148,6 +156,27 @@ export class LiveKitClient implements LiveKitApi {
     )) as { id?: string } | undefined;
     this.opts.logger.info('aida-prime dispatched', { roomName, callSessionId: metadata.callSessionId });
     return { roomName, dispatchId: result?.id };
+  }
+
+  /** Dispatch metadata v2: exactly the credential and the routing scope the Agent must echo back at bootstrap. */
+  async dispatchAgent(roomName: string, metadata: DispatchMetadata): Promise<string> {
+    const result = await this.twirp('AgentDispatchService', 'CreateDispatch', {
+      room: roomName, agent_name: this.opts.agentName, restart_policy: 'JRP_NEVER',
+      metadata: JSON.stringify({ callSessionId: metadata.callSessionId, bootstrapToken: metadata.bootstrapToken, pbxInstanceId: metadata.pbxInstanceId, context: metadata.context }),
+    }, { roomAdmin: true, room: roomName, agent: true }) as { id?: string };
+    if (!result?.id) throw new UpstreamError('LiveKit dispatch unavailable', 'livekit');
+    return result.id;
+  }
+
+  async dispatchIdentity(room: string, dispatchId: string): Promise<string | undefined> {
+    type Job = { state?: { participant_identity?: string; participantIdentity?: string; status?: string | number } };
+    type Dispatch = { id: string; room: string; agent_name?: string; agentName?: string; state?: { jobs?: Job[] } };
+    const result = await this.twirp('AgentDispatchService', 'ListDispatch', { room, dispatch_id: dispatchId },
+      { roomAdmin: true, room, agent: true }) as { agent_dispatches?: Dispatch[]; agentDispatches?: Dispatch[] };
+    const matches = (result.agent_dispatches ?? result.agentDispatches)?.filter(d => d.id === dispatchId && d.room === room && (d.agent_name ?? d.agentName) === this.opts.agentName) ?? [];
+    const jobs = matches.length === 1 ? matches[0]?.state?.jobs ?? [] : [];
+    const job = jobs[0];
+    return jobs.length === 1 && ['JS_RUNNING', 1].includes(job?.state?.status ?? '') ? job?.state?.participant_identity ?? job?.state?.participantIdentity : undefined;
   }
 
   async publishData(roomName: string, topic: string, payload: Record<string, unknown>): Promise<void> {
@@ -164,11 +193,11 @@ export class LiveKitClient implements LiveKitApi {
     );
   }
 
-  async listParticipants(roomName: string): Promise<Array<{ sid: string; identity: string; kind?: string }>> {
+  async listParticipants(roomName: string): Promise<Participant[]> {
     const result = (await this.twirp('RoomService', 'ListParticipants', { room: roomName }, {
       roomAdmin: true,
       room: roomName,
-    })) as { participants?: Array<{ sid: string; identity: string; kind?: string }> } | undefined;
+    })) as { participants?: Participant[] } | undefined;
     return result?.participants ?? [];
   }
 

@@ -1,4 +1,5 @@
 import mysql from 'mysql2/promise';
+import { eventStates, handsetState } from './callState.js';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { ConflictError, NotFoundError } from '../errors.js';
@@ -6,15 +7,13 @@ import type {
   CallEventRecord,
   CallSessionRecord,
   ControlCommandRecord,
-  DidFallbackRecord,
   Disposition,
   NewCallSession,
-  ProvisioningOperationRecord,
   RuntimeStore,
   LiveKitWebhookUpdate,
   LiveKitWebhookResult,
 } from './store.js';
-import type { DestinationType } from '../nocodb/configRepository.js';
+import type { DestinationType } from './store.js';
 
 export interface RuntimeMysqlConfig {
   host: string;
@@ -52,6 +51,8 @@ interface CallSessionRow {
   id: string;
   asterisk_linked_id: string;
   officepulse_instance_id: string;
+  pbx_context: string | null;
+  ingress_context: string | null;
   tenant_id: string;
   did_e164: string;
   caller_number: string | null;
@@ -76,6 +77,8 @@ function toSession(row: CallSessionRow): CallSessionRecord {
     id: row.id,
     asteriskLinkedId: row.asterisk_linked_id,
     officePulseInstanceId: row.officepulse_instance_id,
+    pbxContext: row.pbx_context ?? undefined,
+    ingressContext: row.ingress_context ?? undefined,
     tenantId: row.tenant_id,
     didE164: row.did_e164,
     callerNumber: row.caller_number ?? undefined,
@@ -101,7 +104,7 @@ function toSession(row: CallSessionRow): CallSessionRecord {
 /**
  * MySQL implementation of the runtime store. Prepared statements only; the
  * connecting account needs rights on `aidacalls_db` alone (see
- * deploy/sql/grants.sql).
+ * scripts/db-users.sh and docs/DB_USERS.md).
  */
 export class MysqlRuntimeStore implements RuntimeStore {
   private readonly pool: mysql.Pool;
@@ -135,14 +138,16 @@ export class MysqlRuntimeStore implements RuntimeStore {
   async createCallSession(session: NewCallSession): Promise<{ session: CallSessionRecord; created: boolean }> {
     try {
       await this.pool.execute(
-        `INSERT INTO call_session (id, asterisk_linked_id, officepulse_instance_id, tenant_id, did_e164,
+        `INSERT INTO call_session (id, asterisk_linked_id, officepulse_instance_id, pbx_context, ingress_context, tenant_id, did_e164,
            caller_number, config_did_route_id, config_did_route_rev, config_profile_id, config_profile_rev,
            config_tenant_rev, room_name, destination_type, destination_id, disposition, state)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           session.id,
           session.asteriskLinkedId,
           session.officePulseInstanceId,
+          session.pbxContext ?? null,
+          session.ingressContext ?? null,
           session.tenantId,
           session.didE164,
           session.callerNumber ?? null,
@@ -257,24 +262,35 @@ export class MysqlRuntimeStore implements RuntimeStore {
 
   async applyCallEvent(callSessionId: string, event: {
     eventType: string; occurredAt: string; idempotencyKey: string; payload?: Record<string, unknown>;
-  }, state?: string): Promise<void> {
+  }, state?: string): Promise<{ stateChanged: boolean; state?: string }> {
     const conn = await this.pool.getConnection();
     try {
       await conn.beginTransaction();
-      const [calls] = await conn.execute<mysql.RowDataPacket[]>('SELECT ended_at FROM call_session WHERE id=? FOR UPDATE', [callSessionId]);
+      const [calls] = await conn.execute<mysql.RowDataPacket[]>('SELECT ended_at,state FROM call_session WHERE id=? FOR UPDATE', [callSessionId]);
       if (!calls[0]) throw new NotFoundError('call not found');
       const [receipts] = await conn.execute<mysql.RowDataPacket[]>('SELECT eventKey FROM aida_tbl_EventReceipt WHERE uidCall=? AND eventKey=?', [callSessionId, event.idempotencyKey]);
-      if (receipts.length) { await conn.commit(); return; }
+      if (receipts.length) { await conn.commit(); return { stateChanged: false }; }
+      const [previousEvents] = await conn.execute<mysql.RowDataPacket[]>(`SELECT event_type,payload FROM call_event WHERE call_session_id=? AND event_type IN (${Object.keys(eventStates).map(() => '?').join(',')}) ORDER BY sequence_number DESC LIMIT 1`, [callSessionId, ...Object.keys(eventStates)]);
       await conn.execute('INSERT INTO aida_tbl_EventReceipt (uidCall,eventKey) VALUES (?,?)', [callSessionId, event.idempotencyKey]);
       const [seqs] = await conn.execute<mysql.RowDataPacket[]>('SELECT COALESCE(MAX(sequence_number),0)+1 AS seq FROM call_event WHERE call_session_id=?', [callSessionId]);
+      // Late transport events cannot undo a takeover or resurrect an ended call.
+      const lateScreening = state === 'screening' && (['admitted','agent-ready','human-active','fallback'].includes(calls[0].state) ||
+        (calls[0].state === 'ringing' && event.eventType !== 'takeover-failed'));
+      const stateChanged = !!state && state !== calls[0].state && !calls[0].ended_at && !lateScreening && !(state === 'ringing' && ['human-active','fallback'].includes(calls[0].state));
+      const effectiveState = handsetState(stateChanged ? state! : String(calls[0].state));
+      // Save the effective projection on the receipt event. A later stale transport
+      // event must not make the next unchanged state look like a fresh notification.
+      const payload = state ? { ...event.payload, handsetState: effectiveState } : event.payload;
       await conn.execute('INSERT INTO call_event (id,call_session_id,sequence_number,event_type,payload) VALUES (?,?,?,?,?)',
-        [randomUUID(),callSessionId,Number(seqs[0]?.seq),event.eventType,event.payload ? JSON.stringify(event.payload) : null]);
-      // Late/replayed bridge or room events cannot resurrect an ended phone call.
-      if (state && !calls[0].ended_at) {
+        [randomUUID(),callSessionId,Number(seqs[0]?.seq),event.eventType,payload ? JSON.stringify(payload) : null]);
+      if (stateChanged) {
         await conn.execute('UPDATE call_session SET state=?,ended_at=?,version=version+1 WHERE id=?',
           [state,state === 'ended' ? new Date(event.occurredAt) : null,callSessionId]);
       }
       await conn.commit();
+      const previousState = asRecord(previousEvents[0]?.payload)?.handsetState ?? eventStates[String(previousEvents[0]?.event_type)];
+      const alertChanged = !!state && effectiveState === state && previousState !== state;
+      return { stateChanged: alertChanged, state: alertChanged ? state : undefined };
     } catch (error) { await conn.rollback(); throw error; }
     finally { conn.release(); }
   }
@@ -282,11 +298,12 @@ export class MysqlRuntimeStore implements RuntimeStore {
   async claimControlCommand(
     command: ControlCommandRecord,
     expectedVersion?: number,
+    requiredState?: string,
   ): Promise<{ claimed: boolean; existing?: ControlCommandRecord }> {
     const conn = await this.pool.getConnection();
     try {
       await conn.beginTransaction();
-      const [sessions] = await conn.execute<mysql.RowDataPacket[]>('SELECT version,ended_at FROM call_session WHERE id=? FOR UPDATE', [command.callSessionId]);
+      const [sessions] = await conn.execute<mysql.RowDataPacket[]>('SELECT version,ended_at,state FROM call_session WHERE id=? FOR UPDATE', [command.callSessionId]);
       const session = sessions[0];
       if (!session) throw new NotFoundError('call not found');
       const [rows] = await conn.execute<mysql.RowDataPacket[]>('SELECT * FROM control_command WHERE call_session_id=? AND idempotency_key=?', [command.callSessionId, command.idempotencyKey]);
@@ -297,6 +314,11 @@ export class MysqlRuntimeStore implements RuntimeStore {
         return { claimed: false, existing: { ...command, status: String(previous.status), result: asRecord(previous.result) } };
       }
       if (session.ended_at) throw new ConflictError('call has ended');
+      if (requiredState && session.state !== requiredState && !(requiredState === 'screening' && ['admitted','agent-ready'].includes(session.state))) throw new ConflictError(session.state === 'ringing' ? 'takeover_in_progress' : session.state === 'human-active' ? 'already_taken' : 'call_not_screening');
+      if (requiredState) {
+        const [pending] = await conn.execute<mysql.RowDataPacket[]>("SELECT id FROM control_command WHERE call_session_id=? AND command_type='TAKEOVER' AND status='in-progress' LIMIT 1", [command.callSessionId]);
+        if (pending.length) throw new ConflictError('takeover_in_progress');
+      }
       if (expectedVersion !== undefined && (!Number.isSafeInteger(expectedVersion) || expectedVersion !== Number(session.version))) throw new ConflictError('call version changed; refresh call state');
       await conn.execute(
         'INSERT INTO control_command (id,call_session_id,idempotency_key,command_type,payload,status) VALUES (?,?,?,?,?,?)',
@@ -304,7 +326,7 @@ export class MysqlRuntimeStore implements RuntimeStore {
       );
       await conn.execute('UPDATE call_session SET version=version+1 WHERE id=?', [command.callSessionId]);
       const [seqs] = await conn.execute<mysql.RowDataPacket[]>('SELECT COALESCE(MAX(sequence_number),0)+1 AS seq FROM call_event WHERE call_session_id=?', [command.callSessionId]);
-      await conn.execute('INSERT INTO call_event (id,call_session_id,sequence_number,event_type,payload) VALUES (?,?,?,?,?)', [randomUUID(),command.callSessionId,Number(seqs[0]?.seq), 'command.accepted', JSON.stringify({commandType: command.commandType})]);
+      await conn.execute('INSERT INTO call_event (id,call_session_id,sequence_number,event_type,payload) VALUES (?,?,?,?,?)', [randomUUID(),command.callSessionId,Number(seqs[0]?.seq), 'command.accepted', JSON.stringify({commandType: command.commandType, ...(command.payload?.deviceId ? { deviceId: command.payload.deviceId, endpointId: command.payload.endpointId } : {})})]);
       await conn.commit();
       return { claimed: true };
     } catch (error) { await conn.rollback(); throw error; }
@@ -355,13 +377,7 @@ export class MysqlRuntimeStore implements RuntimeStore {
            ON DUPLICATE KEY UPDATE identity = VALUES(identity), kind = VALUES(kind), left_at = NULL`,
           [delivery.callSessionId, participant.sid, participant.identity ?? null, participant.kind],
         );
-        if (participant.isAgent && !calls[0].ended_at) {
-          await conn.execute(
-            `UPDATE call_session SET agent_participant_sid = ?, version = version + 1
-             WHERE id = ? AND (agent_participant_sid IS NULL OR agent_participant_sid <> ?)`,
-            [participant.sid, delivery.callSessionId, participant.sid],
-          );
-        }
+        // Only atomic bootstrap admission binds the intended dispatch's verified agent SID.
       } else if (delivery.eventType === 'participant_left' && participant) {
         await conn.execute(
           `UPDATE livekit_participant SET left_at = COALESCE(left_at, CURRENT_TIMESTAMP(3))
@@ -441,83 +457,6 @@ export class MysqlRuntimeStore implements RuntimeStore {
       if (isDuplicate(err)) return false;
       throw err;
     }
-  }
-
-  async upsertDidFallback(record: DidFallbackRecord): Promise<void> {
-    await this.pool.execute(
-      `INSERT INTO did_fallback (did_route_id, tenant_id, did_e164, destination_type, destination_id, enabled)
-       VALUES (?, ?, ?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE tenant_id = VALUES(tenant_id), did_e164 = VALUES(did_e164),
-         destination_type = VALUES(destination_type), destination_id = VALUES(destination_id),
-         enabled = VALUES(enabled)`,
-      [
-        record.didRouteId,
-        record.tenantId,
-        record.didE164,
-        record.destinationType,
-        record.destinationId,
-        record.enabled ? 1 : 0,
-      ],
-    );
-  }
-
-  async getDidFallbackByDid(didE164: string): Promise<DidFallbackRecord | undefined> {
-    const [rows] = await this.pool.execute('SELECT * FROM did_fallback WHERE did_e164 = ?', [didE164]);
-    return this.toFallback(rows);
-  }
-
-  async getDidFallbackByRouteId(didRouteId: string): Promise<DidFallbackRecord | undefined> {
-    const [rows] = await this.pool.execute('SELECT * FROM did_fallback WHERE did_route_id = ?', [didRouteId]);
-    return this.toFallback(rows);
-  }
-
-  private toFallback(rows: unknown): DidFallbackRecord | undefined {
-    const row = (rows as Array<{
-      did_route_id: string;
-      tenant_id: string;
-      did_e164: string;
-      destination_type: string;
-      destination_id: string;
-      enabled: number;
-    }>)[0];
-    if (!row) return undefined;
-    return {
-      didRouteId: row.did_route_id,
-      tenantId: row.tenant_id,
-      didE164: row.did_e164,
-      destinationType: row.destination_type as DestinationType,
-      destinationId: row.destination_id,
-      enabled: row.enabled === 1,
-    };
-  }
-
-  async recordProvisioningOperation(record: ProvisioningOperationRecord): Promise<void> {
-    await this.pool.execute(
-      'INSERT INTO provisioning_operation (request_id, kind, external_id, action, status) VALUES (?, ?, ?, ?, ?)',
-      [record.requestId, record.kind, record.externalId, record.action, record.status],
-    );
-  }
-
-  async getProvisioningOperation(requestId: string): Promise<ProvisioningOperationRecord | undefined> {
-    const [rows] = await this.pool.execute(
-      'SELECT request_id, kind, external_id, action, status FROM provisioning_operation WHERE request_id = ?',
-      [requestId],
-    );
-    const row = (rows as Array<{
-      request_id: string;
-      kind: string;
-      external_id: string;
-      action: string;
-      status: string;
-    }>)[0];
-    if (!row) return undefined;
-    return {
-      requestId: row.request_id,
-      kind: row.kind,
-      externalId: row.external_id,
-      action: row.action,
-      status: row.status,
-    };
   }
 
   async setDependencyStatus(name: string, ready: boolean, detail?: string): Promise<void> {

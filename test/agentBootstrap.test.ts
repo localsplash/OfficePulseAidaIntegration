@@ -444,7 +444,7 @@ test('admission consumes the Identity origin resolved from PlatformConfig and th
   const env = { FASTAGI_BIND: '127.0.0.1', NATIVE_ADMISSION_ENABLED: 'true', VOICE_ENABLED: 'true', PBX_INVENTORY_ENABLED: 'true', LIVEKIT_AGENT_NAME: 'aida-prime-bootstrap-dev', LIVEKIT_TRUNK_ENDPOINT: 'livekit' };
   const noco = new FakeNocoApi();
   noco.seed('cfg_tbl_Setting', [{ app: 'identity', settingKey: 'APP_BASE_URL', settingValue: 'https://id.example.test/' },
-    { app: 'officepulse', settingKey: 'APP_BASE_URL', settingValue: 'https://officepulse.example.test' }]);
+    { app: 'aida-pbx', settingKey: 'APP_BASE_URL', settingValue: 'https://officepulse.example.test' }]);
   const agent = agentConfig(await resolvePlatformSettings(env, noco));
   assert.equal(agent?.identityOrigin, 'https://id.example.test');
   const seen: string[] = [];
@@ -452,7 +452,7 @@ test('admission consumes the Identity origin resolved from PlatformConfig and th
   assert.equal(await enabled('42'), true);
   assert.deepEqual(seen, ['https://id.example.test/api/runtime/tenants/42']);
   // No record: admission cannot start, and the error names the central record rather than the retired setting.
-  noco.seed('cfg_tbl_Setting', [{ app: 'officepulse', settingKey: 'APP_BASE_URL', settingValue: 'https://officepulse.example.test' }]);
+  noco.seed('cfg_tbl_Setting', [{ app: 'aida-pbx', settingKey: 'APP_BASE_URL', settingValue: 'https://officepulse.example.test' }]);
   const unresolved = await resolvePlatformSettings(env, noco);
   assert.equal(unresolved.ID_BASE_URL, undefined);
   assert.throws(() => agentConfig(unresolved), /identity\/APP_BASE_URL/);

@@ -17,6 +17,7 @@ import { Readiness } from './readiness.js';
 import { HttpApi, publicApiOptions } from './http/httpServer.js';
 import { buildRoutes } from './http/routes.js';
 import { assembleApiRoutes } from './http/apiRoutes.js';
+import { runtimeQueryRoutes } from './http/runtimeQueryRoutes.js';
 import { voiceAvailability } from './http/voiceAvailability.js';
 import { FastAgiServer } from './agi/fastAgiServer.js';
 import { createBootstrapHandler, nativePbxFallback } from './agi/bootstrapHandler.js';
@@ -130,6 +131,7 @@ async function main(): Promise<void> {
         handler: () => ({ status: 503, body: { error: 'authority_unavailable' } }) }]),
       ...pbxInventoryRoutes(inventory?.reader ?? noInventory, !!inventory, config.officePulseInstanceId, !!provisioner),
       ...pbxProvisioningRoutes(provisioner, !!provisioner, config.officePulseInstanceId),
+      ...runtimeQueryRoutes(runtime),
     ],
     voiceAvailability(buildRoutes({ runtime, takeover,
       defaultRingTimeoutSeconds: config.takeover.ringTimeoutSeconds,

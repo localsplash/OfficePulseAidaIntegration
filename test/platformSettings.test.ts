@@ -19,7 +19,7 @@ test('runtime settings resolve explicit scope parents and nonblank environment o
   const result = await resolvePlatformSettings({ DB_NAME: 'env-db', ARI_URL: ' ' }, api([
     setting('*', 'DB_NAME', 'global'), setting('*', 'trustedCIDR', '172.20.0.0/16'),
     setting('aida', 'DB_NAME', 'shared'), setting('aida', 'ARI_URL', 'http://pbx'),
-    setting('officepulse', 'DB_NAME', 'runtime'), setting('officepulse', 'ARI_URL', ''),
+    setting('aida-pbx', 'DB_NAME', 'runtime'), setting('aida-pbx', 'ARI_URL', ''),
   ]));
   assert.equal(result.DB_NAME, 'env-db');
   assert.equal(result.ARI_URL, 'http://pbx');
@@ -29,8 +29,8 @@ test('runtime settings resolve explicit scope parents and nonblank environment o
 
 test('duplicate scoped settings fail without including secret values', async () => {
   await assert.rejects(resolvePlatformSettings({}, api([
-    setting('officepulse', 'LIVEKIT_API_SECRET', 'do-not-log-this'),
-    setting('officepulse', 'LIVEKIT_API_SECRET', 'another-secret'),
+    setting('aida-pbx', 'LIVEKIT_API_SECRET', 'do-not-log-this'),
+    setting('aida-pbx', 'LIVEKIT_API_SECRET', 'another-secret'),
   ])), (error: Error) => error.message.includes('duplicate') && !error.message.includes('do-not-log-this'));
 });
 
@@ -41,7 +41,7 @@ test('settings read failure propagates instead of treating unavailable configura
 
 test('the Identity origin comes from the identity application record only, never another app or the key alone', async () => {
   const noco = api([
-    setting('officepulse', 'APP_BASE_URL', 'https://officepulse.example.test'),
+    setting('aida-pbx', 'APP_BASE_URL', 'https://officepulse.example.test'),
     setting('aida', 'APP_BASE_URL', 'https://aida.example.test'),
     setting('*', 'APP_BASE_URL', 'https://platform.example.test'),
     setting('aidaadmin', 'APP_BASE_URL', 'https://admin.example.test'),
@@ -61,7 +61,7 @@ test('duplicate Identity APP_BASE_URL records are rejected without printing thei
 
 test('a missing or blank Identity APP_BASE_URL leaves ID_BASE_URL unset rather than guessing a host', async () => {
   for (const identity of [[], [setting('identity', 'APP_BASE_URL', '   ')], [{ app: 'identity', settingKey: 'APP_BASE_URL', settingValue: null }]]) {
-    const result = await resolvePlatformSettings({ DB_NAME: 'env-db' }, api([setting('officepulse', 'APP_BASE_URL', 'https://officepulse.example.test')], identity));
+    const result = await resolvePlatformSettings({ DB_NAME: 'env-db' }, api([setting('aida-pbx', 'APP_BASE_URL', 'https://officepulse.example.test')], identity));
     assert.equal('ID_BASE_URL' in result, false);
     assert.equal(result.DB_NAME, 'env-db');
   }
@@ -80,11 +80,11 @@ test('a malformed Identity APP_BASE_URL is a configuration error that never echo
 
 test('a stale ID_BASE_URL override is rejected from the environment and from every settings scope', async () => {
   await assert.rejects(resolvePlatformSettings({ ID_BASE_URL: 'https://stale.example.test' }, api([])), message(retired));
-  for (const scope of ['*', 'aida', 'officepulse']) {
+  for (const scope of ['*', 'aida', 'aida-pbx']) {
     await assert.rejects(resolvePlatformSettings({}, api([setting(scope, 'ID_BASE_URL', 'https://stale.example.test')])), message(retired));
   }
   // Blank values are not overrides, matching every other setting.
-  const result = await resolvePlatformSettings({ ID_BASE_URL: '  ' }, api([setting('officepulse', 'ID_BASE_URL', '')]));
+  const result = await resolvePlatformSettings({ ID_BASE_URL: '  ' }, api([setting('aida-pbx', 'ID_BASE_URL', '')]));
   assert.equal(result.ID_BASE_URL, identityOrigin);
 });
 
@@ -95,7 +95,7 @@ test('environment-only mode keeps ID_BASE_URL from the environment and reads no 
 });
 
 test('a NocoDB failure during the Identity lookup is a configuration error, not an unset origin', async () => {
-  const noco = api([setting('officepulse', 'DB_NAME', 'runtime')]);
+  const noco = api([setting('aida-pbx', 'DB_NAME', 'runtime')]);
   const flaky: NocoReadApi = {
     listRecords: async (table, where, limit) => { if (where.some(w => w.field === 'settingKey')) throw new Error('NocoDB /records returned 503'); return noco.listRecords(table, where, limit); },
     ping: async () => true,
@@ -104,7 +104,7 @@ test('a NocoDB failure during the Identity lookup is a configuration error, not 
 });
 
 test('shared environment and central instance resolve with a deliberate multi-PBX host override', async () => {
-  const rows = [setting('*', 'ENVIRONMENT_NAME', 'dev'), setting('officepulse', 'OFFICEPULSE_INSTANCE_ID', 'officepulse-dev')];
+  const rows = [setting('*', 'ENVIRONMENT_NAME', 'dev'), setting('aida-pbx', 'OFFICEPULSE_INSTANCE_ID', 'officepulse-dev')];
   const central = await resolvePlatformSettings({}, api(rows));
   assert.equal(central.ENVIRONMENT_NAME, 'dev'); assert.equal(central.OFFICEPULSE_INSTANCE_ID, 'officepulse-dev');
   const host = await resolvePlatformSettings({ OFFICEPULSE_INSTANCE_ID: 'officepulse2-dev' }, api(rows));
@@ -112,14 +112,19 @@ test('shared environment and central instance resolve with a deliberate multi-PB
 });
 
 
-test('canonical database credentials stay in officepulse scope and passwords remain literal', async () => {
+test('canonical database credentials stay in aida-pbx scope and passwords remain literal', async () => {
   const result = await resolvePlatformSettings({}, api([
     setting('*', 'DB_USER', 'global-writer'), setting('aida', 'DB_PASSWORD', 'shared-password'),
-    setting('officepulse', 'DB_HOST', 'db.test'), setting('officepulse', 'DB_NAME', 'aidacalls_db'),
-    setting('officepulse', 'DB_USER', 'aida_runtime'), setting('officepulse', 'DB_PASSWORD', " raw@%:/\n"),
+    setting('aida-pbx', 'DB_HOST', 'db.test'), setting('aida-pbx', 'DB_NAME', 'aidacalls_db'),
+    setting('aida-pbx', 'DB_USER', 'aida_runtime'), setting('aida-pbx', 'DB_PASSWORD', " raw@%:/\n"),
   ]));
   assert.equal(result.DB_USER, 'aida_runtime');
   assert.equal(result.DB_PASSWORD, " raw@%:/\n");
   const empty = await resolvePlatformSettings({}, api([setting('*', 'DB_USER', 'not-mine')]));
   assert.equal(empty.DB_USER, undefined);
+});
+
+test('rows still under the retired officepulse scope stop startup instead of being ignored', async () => {
+  await assert.rejects(resolvePlatformSettings({}, api([setting('officepulse', 'ARI_URL', 'http://pbx'), setting('aida-pbx', 'DB_NAME', 'aidacalls_db')])),
+    message("PlatformConfig scope officepulse was renamed aida-pbx: run AidaPlatformDB's install.sh (any phase) to move its rows"));
 });

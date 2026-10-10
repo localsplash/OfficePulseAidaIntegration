@@ -3,7 +3,7 @@
 Run the built integration service on OfficePulse with Node 22. The existing API
 listeners remain on `HTTP_BIND` (use `127.0.0.1` behind nginx), ports 8085 and 8086.
 Enable the separate human operations listener with the following PlatformConfig
-settings in the `officepulse` application scope:
+settings in the `aida-pbx` application scope:
 
 | Setting | Dev value |
 | --- | --- |

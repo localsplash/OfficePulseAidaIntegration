@@ -69,7 +69,7 @@ See the [LiveKit grant reference](https://docs.livekit.io/frontends/reference/to
 
 ## Notifications
 
-Use a separate Pusher app per environment. `officepulse` PlatformConfig rows
+Use a separate Pusher app per environment. `aida-pbx` PlatformConfig rows
 `PUSHER_APP_ID`, `PUSHER_KEY`, `PUSHER_SECRET` (`bSecret=1`), `PUSHER_CLUSTER` supply
 server credentials; optional `PUSHER_TIMEOUT_MS` defaults to 3000. Blank app ID
 disables alerts. Restart after changes. `me` gives the app only the public key,

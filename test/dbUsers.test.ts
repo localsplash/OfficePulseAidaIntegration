@@ -15,8 +15,7 @@ const script = fileURLToPath(new URL('../scripts/db-users.sh', import.meta.url))
 const sample: NodeJS.ProcessEnv = {
   DB_HOST: 'db.example.test', DB_PORT: '3306',
   DB_NAME: 'aida_grants_test', DB_USER: 'runtime_user',
-  DB_PASSWORD: "runtime'\\secret", MYSQL_ADMIN_USER: 'admin', MYSQL_ADMIN_PASSWORD: 'admin-secret',
-  READER_DB_USER: 'reader_user', READER_DB_NAME: 'aida_grants_test', READER_DB_PASSWORD: "quote'\\$(not-a-command)\n",
+  DB_PASSWORD: "runtime'\\$(not-a-command)\n", MYSQL_ADMIN_USER: 'admin', MYSQL_ADMIN_PASSWORD: 'admin-secret',
 };
 
 test('DB provisioning sends escaped secrets through stdin, uses the existing inputs and narrows grants', async t => {
@@ -37,31 +36,26 @@ process.stdin.on('end', async () => {
   assert.ok(recorded.args.includes('--host=operator-tunnel'));
   assert.ok(recorded.args.includes('--port=13306'));
   assert.equal(recorded.password, sample.MYSQL_ADMIN_PASSWORD);
-  assert.doesNotMatch(JSON.stringify(recorded.args), /secret|quote|not-a-command/);
+  assert.doesNotMatch(JSON.stringify(recorded.args), /secret|runtime'|not-a-command/);
   assert.match(recorded.sql, /SET SESSION sql_mode = 'NO_ENGINE_SUBSTITUTION'/);
-  assert.ok(recorded.sql.includes("IDENTIFIED BY 'runtime''\\\\secret'"));
-  assert.ok(recorded.sql.includes("IDENTIFIED BY 'quote''\\\\$(not-a-command)\n'"));
-  assert.match(recorded.sql, /CREATE USER IF NOT EXISTS 'reader_user'@'%'/);
+  assert.ok(recorded.sql.includes("IDENTIFIED BY 'runtime''\\\\$(not-a-command)\n'"));
   assert.ok(recorded.sql.includes('GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER ON `aida\\_grants\\_test`.*'));
-  assert.ok(recorded.sql.includes("GRANT SELECT ON `aida\\_grants\\_test`.* TO 'reader_user'@'%'"));
-  assert.equal((recorded.sql.match(/REVOKE ALL PRIVILEGES, GRANT OPTION/g) ?? []).length, 2);
-  assert.equal((recorded.sql.match(/ALTER USER/g) ?? []).length, 2);
-  assert.doesNotMatch(result.stdout + result.stderr, /secret|quote|not-a-command/);
+  assert.equal((recorded.sql.match(/REVOKE ALL PRIVILEGES, GRANT OPTION/g) ?? []).length, 1);
+  assert.equal((recorded.sql.match(/ALTER USER/g) ?? []).length, 1);
+  assert.doesNotMatch(recorded.sql, /GRANT SELECT ON/, 'no read-only account: AidaAdmin reads through the private API');
+  assert.doesNotMatch(result.stdout + result.stderr, /secret|runtime'|not-a-command/);
 
   for (const change of [
-    { DB_USER: 'bad-name' }, { DB_USER: 'reader_user' },
+    { DB_USER: 'bad-name' }, { DB_USER: 'root' },
     { DB_USER: 'admin' }, { DB_NAME: 'asterisk' },
     { DB_NAME: 'aida_%_test' }, { DB_PASSWORD: '' },
     { MYSQL_ADMIN_PASSWORD: '' }, { MYSQL_ADMIN_PORT: '0' }, { MYSQL_ADMIN_PORT: '65536' },
-    { READER_DB_NAME: 'other' }, { READER_DB_USER: 'bad-name' },
-    { READER_DB_PASSWORD: '' }, { READER_DB_USER: 'root' },
-    { READER_DB_USER: 'admin' }, { DB_HOST: '' },
-
+    { DB_HOST: '' },
   ]) {
     await rm(capture);
     await assert.rejects(exec('bash', [script], { env: { ...env, ...change } }), error => {
       const failure = error as Error & { stderr: string };
-      assert.doesNotMatch(failure.stderr, /runtime.*secret|admin-secret|mysql:\/\//);
+      assert.doesNotMatch(failure.stderr, /not-a-command|admin-secret|mysql:\/\//);
       return true;
     });
     await assert.rejects(access(capture), 'validation must precede every MySQL command');
@@ -84,35 +78,28 @@ test('disposable MySQL: provisioning, migrations, exact privileges, idempotence 
   const suffix = randomUUID().replaceAll('-', '').slice(0, 10);
   const database = `aida_users_${suffix}_test`;
   const decoy = database.replaceAll('_', 'x');
-  const runtimeUser = `aida_rt_${suffix}`, readerUser = `aida_ro_${suffix}`;
+  const runtimeUser = `aida_rt_${suffix}`;
   const admin = { host: url.hostname, port: Number(url.port || 3306), user: decodeURIComponent(url.username), password: decodeURIComponent(url.password) };
   const connection = await mysql.createConnection(admin);
   t.after(async () => {
-    for (const user of [runtimeUser, readerUser]) await connection.query(`DROP USER IF EXISTS '${user}'@'%'`);
+    await connection.query(`DROP USER IF EXISTS '${runtimeUser}'@'%'`);
     for (const db of [database, decoy]) await connection.query(`DROP DATABASE IF EXISTS \`${db}\``);
     await connection.end();
   });
-  let runtimePassword = "runtime'\\$password", readerPassword = "reader'\\$password\n";
+  let runtimePassword = "runtime'\\$password\n";
   const provision = () => exec('bash', [script], { env: { ...process.env,
     MYSQL_ADMIN_HOST: admin.host, MYSQL_ADMIN_PORT: String(admin.port), MYSQL_ADMIN_USER: admin.user, MYSQL_ADMIN_PASSWORD: admin.password,
     DB_HOST: admin.host, DB_PORT: String(admin.port), DB_NAME: database,
     DB_USER: runtimeUser, DB_PASSWORD: runtimePassword,
-    READER_DB_USER: readerUser, READER_DB_PASSWORD: readerPassword, READER_DB_NAME: database,
   } });
   const runtimeConfig = () => ({ ...admin, database, user: runtimeUser, password: runtimePassword });
   const grants = async (user: string) => (await connection.query<mysql.RowDataPacket[]>(`SHOW GRANTS FOR '${user}'@'%'`))[0].map(row => String(Object.values(row)[0])).sort();
   await provision();
-  const expectedRuntime = await grants(runtimeUser), expectedReader = await grants(readerUser);
+  const expectedRuntime = await grants(runtimeUser);
   await provision();
   assert.deepEqual(await grants(runtimeUser), expectedRuntime);
-  assert.deepEqual(await grants(readerUser), expectedReader);
   await migrateRuntime(runtimeConfig());
   await migrateRuntime(runtimeConfig());
-  const reader = await mysql.createConnection({ ...admin, database, user: readerUser, password: readerPassword });
-  await reader.query('SELECT * FROM aida_tbl_SchemaMigration');
-  await assert.rejects(reader.query('DELETE FROM aida_tbl_SchemaMigration'), /denied/);
-  await assert.rejects(reader.query('CREATE TABLE forbidden (id INT)'), /denied/);
-  await reader.end();
   await connection.query(`CREATE DATABASE \`${decoy}\``);
   await connection.query(`CREATE TABLE \`${decoy}\`.private_data (id INT)`);
   const runtime = await mysql.createConnection(runtimeConfig());
@@ -122,18 +109,10 @@ test('disposable MySQL: provisioning, migrations, exact privileges, idempotence 
   await runtime.end();
   // Simulate over-broad historical grants, including wildcard leakage and GRANT OPTION.
   await connection.query(`GRANT ALL PRIVILEGES ON \`${database}\`.* TO '${runtimeUser}'@'%' WITH GRANT OPTION`);
-  await connection.query(`GRANT SELECT ON \`${decoy}\`.* TO '${readerUser}'@'%'`);
-  const oldRuntime = runtimePassword, oldReader = readerPassword;
-  runtimePassword = "rotated'\\passwordé"; readerPassword = "rotated'\\readeré\n";
+  const oldRuntime = runtimePassword;
+  runtimePassword = "rotated'\\passwordé\n";
   await provision();
   assert.deepEqual(await grants(runtimeUser), expectedRuntime);
-  assert.deepEqual(await grants(readerUser), expectedReader);
-  for (const [user, password] of [[runtimeUser, oldRuntime], [readerUser, oldReader]]) {
-    await assert.rejects(mysql.createConnection({ ...admin, database, user, password }), /Access denied/);
-  }
+  await assert.rejects(mysql.createConnection({ ...admin, database, user: runtimeUser, password: oldRuntime }), /Access denied/);
   await migrateRuntime(runtimeConfig());
-  const rotatedReader = await mysql.createConnection({ ...admin, database, user: readerUser, password: readerPassword });
-  await rotatedReader.query('SELECT * FROM aida_tbl_SchemaMigration');
-  await assert.rejects(rotatedReader.query(`SELECT * FROM \`${decoy}\`.private_data`), /denied/);
-  await rotatedReader.end();
 });

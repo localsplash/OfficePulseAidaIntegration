@@ -8,7 +8,7 @@ sync status or ring-group provisioning contract.
 
 ## Stores
 
-`aidacalls_db` contains observed integration call sessions/events, command
+`aida_pbx_db` contains observed integration call sessions/events, command
 history, participant/webhook observations, event receipts and dependency status.
 Its rows are diagnostics, not a copy of current PBX configuration or native
 Asterisk CDR. A call session pins its routing scope (`officepulse_instance_id`,
@@ -19,7 +19,7 @@ call rows. Canonical TAKEOVER cannot resolve these IDs as native routing intent.
 The old `provisioning_operation` and `did_fallback` tables and accessors are
 removed. Device enrollment/session tables and reusable device primitives remain;
 canonical routes need a native authorization adapter before registration.
-The migration runner is restricted to `aidacalls_db` and disposable `aida_*_test`
+The migration runner is restricted to `aida_pbx_db` (or `aidacalls_db`, its name before the rename) and disposable `aida_*_test`
 schemas. It cannot target the external `asterisk` database. The runner strips historical database-selection statements; no vendor DDL is
 packaged or applied.
 

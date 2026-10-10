@@ -1,15 +1,16 @@
 # Database account provisioning
 
-OfficePulse owns the accounts for its `aidacalls_db` schema. Run
+AidaPbx owns the accounts for its `aida_pbx_db` schema (named `aidacalls_db`
+until [the one-time rename](RENAME_DATABASE.md)). Run
 `scripts/db-users.sh` as an operator with MySQL admin credentials before starting
 the integration. Startup runs `migrateRuntime`; it never creates database users.
 This script replaces `deploy/sql/grants.sql` and its host/password placeholders.
 
 | Account | Password/configuration home | Grants on the runtime database |
 | --- | --- | --- |
-| `aida_runtime` | PlatformConfig, `app=aida-pbx`: `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` | `SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER` |
+| `aida_pbx_app` (formerly `aida_runtime`) | PlatformConfig, `app=aida-pbx`: `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` | `SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER` |
 
-This is the only account on `aidacalls_db`. AidaAdmin reads calls, events,
+This is the only account on `aida_pbx_db`. AidaAdmin reads calls, events,
 commands, participants, webhook deliveries and dependency status through this
 service's private API (see [PLATFORM_API.md](PLATFORM_API.md)), not with a
 database login of its own.
@@ -21,7 +22,7 @@ not URL-encoded; the optional `DB_PORT` defaults to 3306. Production requires
 Shared `aida` / `*` credentials cannot supply runtime database settings.
 
 The script receives the `DB_*` values directly; the account must differ from
-the operator's. Database names remain `aidacalls_db` or disposable
+the operator's. Database names are `aida_pbx_db`, `aidacalls_db` (until renamed) or disposable
 `aida_*_test` schemas only.
 
 Runtime grants cover DML, table creation/removal and migration 006's `ALTER
@@ -80,8 +81,8 @@ The script does not alter these PBX accounts or the vendor schema.
 
 ## Dev follow-up
 
-The September 22 account migration is already complete: runtime uses
-`aida_runtime`, and `aida_runtime_preview` is removed. Keep that name. The former
+The September 22 account migration is already complete: runtime used
+`aida_runtime` (now `aida_pbx_app`, see [RENAME_DATABASE.md](RENAME_DATABASE.md)), and `aida_runtime_preview` is removed. The former
 read-only `aidaadmin_ro` account is no longer provisioned or used; once AidaAdmin
 runs the release that reads through the API, an operator can remove it with
 `DROP USER 'aidaadmin_ro'@'%'`. The runtime tunnel is managed by

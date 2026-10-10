@@ -5,7 +5,7 @@
 #   INSTALL_DIR default /opt/aida-integration
 #
 # Expects: node >= 22 on the host, /etc/aida-integration/env populated
-# (see README configuration table), and the configured `aidacalls_db` created and granted to the runtime account.
+# (see README configuration table), and the configured `aida_pbx_db` created and granted to the runtime account.
 # Startup applies the packaged runtime migrations to that database; do not
 # execute the historical runtime-schema.sql directly. Also expects
 # the Asterisk templates under asterisk/ installed on the OfficePulse

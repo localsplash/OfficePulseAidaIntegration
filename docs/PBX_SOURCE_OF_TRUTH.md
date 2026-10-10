@@ -71,7 +71,7 @@ this service beside the PBX database or use an explicitly reviewed private path;
 do not open MariaDB publicly or replace the existing listeners.
 
 Native call records are written to `asterisk.cdr` in UTC by adaptive ODBC, while
-`aidacalls_db` records this integration's own call orchestration. They are distinct
+`aida_pbx_db` records this integration's own call orchestration. They are distinct
 data sets. Recording basenames are associated through CDR `userfield`. The
 runbook contains both `calldate` and `start` examples, so verify the installed
 CDR columns and a reliable tenant/call association before adding a CDR API or

@@ -1,7 +1,7 @@
 import type { CallEventRecord, CallSessionRecord } from './store.js';
 
 /**
- * Read-only views of `aidacalls_db` for AidaAdmin's calls, dependencies and
+ * Read-only views of `aida_pbx_db` for AidaAdmin's calls, dependencies and
  * issues screens. AidaAdmin reads them over the private API instead of with
  * its own database login, so this service stays the only one that touches
  * its schema.

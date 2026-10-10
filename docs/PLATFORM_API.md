@@ -33,6 +33,15 @@ packaged or applied.
 - Private GET `/v1/admin/calls/:callSessionId` returns the observed session or 404.
 - Private GET `/v1/admin/calls/:callSessionId/events` returns `{events:[...]}` for an
   call ID. It does not read the PBX CDR table.
+- Private GETs for AidaAdmin's calls, dependencies and issues screens, so it
+  needs no database login: `/v1/admin/calls?state=active|recent|orphaned|all&tenantId=&limit=`
+  returns `{calls}` (unended calls older than 6 hours are orphaned);
+  `/v1/admin/calls/:callSessionId/commands` returns `{commands}` and
+  `/participants` returns `{participants}`; `/v1/admin/runtime/webhook-deliveries?limit=`,
+  `/v1/admin/runtime/dependencies`, `/v1/admin/runtime/failed-commands?sinceHours=&tenantId=`
+  and `/v1/admin/runtime/events?type=A&type=B&sinceHours=&tenantId=` cover the rest.
+  Omitting `tenantId` means every tenant; AidaAdmin scopes requests before calling.
+  These are server-only: the Operations gateway does not expose them.
 - Private POST `/v1/admin/calls/:callSessionId/commands` retains the allowlisted
   `TAKEOVER`/`DRAIN_ACK`, idempotency key and optimistic version contract. Canonical
   `TAKEOVER` returns 503 `native_destination_unavailable` before a command claim.
@@ -55,7 +64,7 @@ Device, ARI, takeover, protocol/event libraries and their tests remain reusable.
 The private listener is CIDR-admitted and never published through the browser
 proxy. AidaAdmin authenticates staff and checks tenant/call access. A query ID,
 forwarded header, MAC, phone number or recording filename is not authorization.
-SQL read grants, context ownership derived from Asterisk's own rows, and HTTP
+Context ownership derived from Asterisk's own rows, and HTTP
 trust are separate requirements.
 
 ## Remaining work

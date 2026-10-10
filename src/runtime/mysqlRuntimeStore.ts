@@ -14,6 +14,11 @@ import type {
   LiveKitWebhookResult,
 } from './store.js';
 import type { DestinationType } from './store.js';
+import {
+  CALL_LIST_LIMIT, ISSUE_HOURS, ISSUE_ROW_LIMIT, ORPHAN_HORIZON_HOURS, WEBHOOK_LIST_LIMIT, clampInt,
+  type CallListFilter, type ControlCommandView, type DependencyStatusView, type IssueOwner, type ParticipantView,
+  type RuntimeQueries, type WebhookDeliveryView,
+} from './queries.js';
 
 export interface RuntimeMysqlConfig {
   host: string;
@@ -45,6 +50,28 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 function iso(value: unknown): string {
   if (value instanceof Date) return value.toISOString();
   return typeof value === 'string' ? value : new Date().toISOString();
+}
+
+function isoOrUndefined(value: unknown): string | undefined {
+  return value === null || value === undefined ? undefined : iso(value);
+}
+
+type Row = Record<string, unknown>;
+
+function toCommandView(row: Row): ControlCommandView {
+  return {
+    idempotencyKey: String(row.idempotency_key),
+    commandType: String(row.command_type),
+    payload: asRecord(row.payload),
+    status: String(row.status),
+    result: asRecord(row.result),
+    createdAt: iso(row.created_at),
+    completedAt: isoOrUndefined(row.completed_at),
+  };
+}
+
+function issueOwner(row: Row): IssueOwner {
+  return { callSessionId: String(row.call_session_id), tenantId: String(row.tenant_id) };
 }
 
 interface CallSessionRow {
@@ -106,7 +133,7 @@ function toSession(row: CallSessionRow): CallSessionRecord {
  * connecting account needs rights on `aidacalls_db` alone (see
  * scripts/db-users.sh and docs/DB_USERS.md).
  */
-export class MysqlRuntimeStore implements RuntimeStore {
+export class MysqlRuntimeStore implements RuntimeStore, RuntimeQueries {
   private readonly pool: mysql.Pool;
 
   constructor(config: RuntimeMysqlConfig) {
@@ -465,5 +492,109 @@ export class MysqlRuntimeStore implements RuntimeStore {
        ON DUPLICATE KEY UPDATE ready = VALUES(ready), detail = VALUES(detail)`,
       [name, ready ? 1 : 0, detail ?? null],
     );
+  }
+
+  // Read-only views for AidaAdmin (RuntimeQueries). Limits and horizons are
+  // inlined only after clampInt, because LIMIT does not bind reliably as a
+  // prepared-statement parameter; every caller-supplied value is a parameter.
+
+  async listCallSessions(filter: CallListFilter): Promise<CallSessionRecord[]> {
+    const limit = clampInt(filter.limit, CALL_LIST_LIMIT.fallback, CALL_LIST_LIMIT.max);
+    const where: string[] = [];
+    const params: string[] = [];
+    if (filter.tenantId !== undefined) { where.push('tenant_id = ?'); params.push(filter.tenantId); }
+    let order = 'created_at DESC';
+    switch (filter.state) {
+      case 'active': where.push(`ended_at IS NULL AND created_at >= NOW() - INTERVAL ${ORPHAN_HORIZON_HOURS} HOUR`); break;
+      case 'orphaned': where.push(`ended_at IS NULL AND created_at < NOW() - INTERVAL ${ORPHAN_HORIZON_HOURS} HOUR`); break;
+      case 'recent': where.push('ended_at IS NOT NULL'); order = 'ended_at DESC'; break;
+      case 'all': break;
+    }
+    const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const [rows] = await this.pool.execute(`SELECT * FROM call_session ${clause} ORDER BY ${order} LIMIT ${limit}`, params);
+    return (rows as CallSessionRow[]).map(toSession);
+  }
+
+  async listControlCommands(callSessionId: string): Promise<ControlCommandView[]> {
+    const [rows] = await this.pool.execute(
+      'SELECT idempotency_key, command_type, payload, status, result, created_at, completed_at ' +
+        'FROM control_command WHERE call_session_id = ? ORDER BY created_at',
+      [callSessionId],
+    );
+    return (rows as Row[]).map(toCommandView);
+  }
+
+  async listParticipants(callSessionId: string): Promise<ParticipantView[]> {
+    const [rows] = await this.pool.execute(
+      'SELECT participant_sid, identity, kind, joined_at, left_at FROM livekit_participant WHERE call_session_id = ? ORDER BY joined_at',
+      [callSessionId],
+    );
+    return (rows as Row[]).map((row) => ({
+      participantSid: String(row.participant_sid),
+      identity: (row.identity as string | null) ?? undefined,
+      kind: String(row.kind),
+      joinedAt: iso(row.joined_at),
+      leftAt: isoOrUndefined(row.left_at),
+    }));
+  }
+
+  async listWebhookDeliveries(limit?: number): Promise<WebhookDeliveryView[]> {
+    const [rows] = await this.pool.execute(
+      'SELECT source, delivery_id, event_type, call_session_id, received_at FROM webhook_delivery ' +
+        `ORDER BY received_at DESC LIMIT ${clampInt(limit, WEBHOOK_LIST_LIMIT.fallback, WEBHOOK_LIST_LIMIT.max)}`,
+    );
+    return (rows as Row[]).map((row) => ({
+      source: String(row.source),
+      deliveryId: String(row.delivery_id),
+      eventType: String(row.event_type),
+      callSessionId: (row.call_session_id as string | null) ?? undefined,
+      receivedAt: iso(row.received_at),
+    }));
+  }
+
+  async listDependencyStatus(): Promise<DependencyStatusView[]> {
+    const [rows] = await this.pool.execute('SELECT name, ready, detail, changed_at FROM dependency_status ORDER BY name');
+    return (rows as Row[]).map((row) => ({
+      name: String(row.name),
+      ready: Number(row.ready) === 1,
+      detail: (row.detail as string | null) ?? undefined,
+      changedAt: iso(row.changed_at),
+    }));
+  }
+
+  async listFailedCommands(sinceHours: number, tenantId?: string): Promise<Array<ControlCommandView & IssueOwner>> {
+    const params: string[] = [];
+    let tenantClause = '';
+    if (tenantId !== undefined) { tenantClause = 'AND s.tenant_id = ?'; params.push(tenantId); }
+    const [rows] = await this.pool.execute(
+      'SELECT c.call_session_id, s.tenant_id, c.idempotency_key, c.command_type, c.payload, c.status, c.result, c.created_at, c.completed_at ' +
+        'FROM control_command c JOIN call_session s ON s.id = c.call_session_id ' +
+        `WHERE c.status = 'failed' AND c.created_at >= NOW() - INTERVAL ${clampInt(sinceHours, ISSUE_HOURS.fallback, ISSUE_HOURS.max)} HOUR ` +
+        `${tenantClause} ORDER BY c.created_at DESC LIMIT ${ISSUE_ROW_LIMIT}`,
+      params,
+    );
+    return (rows as Row[]).map((row) => ({ ...toCommandView(row), ...issueOwner(row) }));
+  }
+
+  async listEventsOfType(eventTypes: string[], sinceHours: number, tenantId?: string): Promise<Array<CallEventRecord & IssueOwner>> {
+    if (eventTypes.length === 0) return [];
+    const params: string[] = [...eventTypes];
+    let tenantClause = '';
+    if (tenantId !== undefined) { tenantClause = 'AND s.tenant_id = ?'; params.push(tenantId); }
+    const [rows] = await this.pool.execute(
+      'SELECT e.call_session_id, s.tenant_id, e.sequence_number, e.event_type, e.payload, e.created_at ' +
+        'FROM call_event e JOIN call_session s ON s.id = e.call_session_id ' +
+        `WHERE e.event_type IN (${eventTypes.map(() => '?').join(', ')}) ` +
+        `AND e.created_at >= NOW() - INTERVAL ${clampInt(sinceHours, ISSUE_HOURS.fallback, ISSUE_HOURS.max)} HOUR ` +
+        `${tenantClause} ORDER BY e.created_at DESC LIMIT ${ISSUE_ROW_LIMIT}`,
+      params,
+    );
+    return (rows as Row[]).map((row) => ({
+      sequenceNumber: Number(row.sequence_number),
+      eventType: String(row.event_type),
+      payload: asRecord(row.payload),
+      createdAt: iso(row.created_at),
+      ...issueOwner(row),
+    }));
   }
 }

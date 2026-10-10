@@ -91,9 +91,9 @@ Admin shows inventory unavailable while business administration and integration
 history remain usable.
 
 Provision the platform database accounts with [`scripts/db-users.sh`](scripts/db-users.sh)
-before startup. It uses the existing runtime settings and AidaAdmin reader URL,
-creates `aida_runtime`/`aidaadmin_ro`, and converges migration/read-only grants on
-every run. See [database account ownership and operator instructions](docs/DB_USERS.md),
+before startup. It uses the existing runtime settings, creates `aida_runtime`
+and converges its migration grants on every run. AidaAdmin has no login on this
+database; it reads runtime state through the private API. See [database account ownership and operator instructions](docs/DB_USERS.md),
 including the separate PBX account templates. The old runtime `grants.sql` is retired.
 
 ### Identity base URL

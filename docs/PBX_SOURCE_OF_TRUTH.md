@@ -34,7 +34,7 @@ Every `/v1/admin/pbx/*` route except `/contexts` requires exactly one `context` 
 
 ## Configuration and database access
 
-Settings follow the implemented environment → `officepulse` → `aida` → `*` precedence in `PlatformConfig.cfg_tbl_Setting`. Inventory is disabled by default. Set:
+Settings follow the implemented environment → `aida-pbx` → `aida` → `*` precedence in `PlatformConfig.cfg_tbl_Setting`. Inventory is disabled by default. Set:
 
 ```text
 PBX_INVENTORY_ENABLED=true
@@ -94,7 +94,7 @@ Managed DID destinations belong in the mapped `asterisk.extensions` table. Ident
 1. For every `PBX_INVENTORY_TENANTS_JSON` entry `"<iTenantId>": {"contexts": [...], "queueNames": [...], "didContext": "..."}`, open that tenant in AidaAdmin's Tenants screen and set its primary Asterisk context to `contexts[0]`, any further entries as additional contexts, and `didContext` as the tenant's DID ingress context. AidaAdmin authorizes browser requests against those contexts; OfficePulse itself no longer stores the tenant.
 2. For every former `queueNames` entry, adopt the legacy queue into the extension context that owns it: `npm run pbx:adopt-queue -- <context> <queue>` prints a review query and the exact `INSERT INTO extensions (...)` ownership-marker statement. It performs no database access and exits 2 on bad input. Confirm the review query returns no rows, then apply the statement with an operator account. A marker that ends up in two contexts makes the queue ambiguous and owned by nobody. Queues created through the API already carry their marker.
 3. For every `AGENT_PROFILE_IDS_JSON` entry `"<iTenantId>": "<profileId>"`, create a context-default assignment through AidaAdmin (Profiles screen, "Default profile for context") for each of that tenant's extension contexts. This writes a `aida_tbl_ProfileAssignment` row with `pbx_instance_id` = this service's `OFFICEPULSE_INSTANCE_ID`, `context`, an empty `did`, the `profile_id` and `enabled`. DID-specific assignments (Numbers screen) override the context default for one E.164. Tenants that previously relied on "exactly one enabled profile" also need an explicit assignment: without one, callers stay on the PBX queue.
-4. Remove both settings from the process environment and from every `*`/`aida`/`officepulse` PlatformConfig row, then restart. Existing endpoint IDs (`<extension>-t<N>`), legacy queue names and managed DID rows are preserved; nothing is renamed. New endpoints are `<extension>-<context>` and new queues `<context>.<slug>`.
+4. Remove both settings from the process environment and from every `*`/`aida`/`aida-pbx` PlatformConfig row, then restart. Existing endpoint IDs (`<extension>-t<N>`), legacy queue names and managed DID rows are preserved; nothing is renamed. New endpoints are `<extension>-<context>` and new queues `<context>.<slug>`.
 
 Assignments take effect at the next background refresh (`AGENT_CONFIG_REFRESH_SECONDS`), without a restart; calls already admitted keep their snapshot. Live PBX/LiveKit acceptance of this migration has not been exercised; unit, HTTP and shared-fixture tests are the only evidence.
 

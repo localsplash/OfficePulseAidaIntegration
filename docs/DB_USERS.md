@@ -7,13 +7,13 @@ This script replaces `deploy/sql/grants.sql` and its host/password placeholders.
 
 | Account | Password/configuration home | Grants on the runtime database |
 | --- | --- | --- |
-| `aida_runtime` | PlatformConfig, `app=officepulse`: `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` | `SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER` |
-| `aidaadmin_ro` | PlatformConfig, `app=aida-admin-runtime`: the same `DB_*` setting keys, with a distinct reader user/password | `SELECT` |
+| `aida_runtime` | PlatformConfig, `app=aida-pbx`: `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` | `SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER` |
+| `aidaadmin_ro` | PlatformConfig, `app=aida-pbx-reader`: the same `DB_*` setting keys, with a distinct reader user/password | `SELECT` |
 
 AidaPlatformDB's database/app setup seeds both scopes and invokes this script
 with those exact values. No database URL setting is read. Passwords are literal,
 not URL-encoded; the optional `DB_PORT` defaults to 3306. Production requires
-`DB_HOST`, `DB_NAME`, `DB_USER` and `DB_PASSWORD` in the `officepulse` scope.
+`DB_HOST`, `DB_NAME`, `DB_USER` and `DB_PASSWORD` in the `aida-pbx` scope.
 Shared `aida` / `*` credentials cannot supply runtime database settings.
 
 The script receives the writer's `DB_*` values directly. The second connection's
@@ -73,7 +73,7 @@ the **Asterisk database server**, using the reviewed table-specific templates
 source-host/password substitution and verification of the installed Realtime
 schema; they are separate from the platform provisioning script.
 
-Their password homes are PlatformConfig's `officepulse` settings
+Their password homes are PlatformConfig's `aida-pbx` settings
 `PBX_INVENTORY_MYSQL_PASSWORD` and `PBX_PROVISIONING_MYSQL_PASSWORD`, alongside
 the corresponding `_USER` settings. Inventory gets only the listed SELECTs;
 the writer gets the listed SELECT/INSERT/DELETE grants, with SELECT limited to

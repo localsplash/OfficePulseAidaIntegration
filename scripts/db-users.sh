@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Operator-run provisioning for the platform runtime database, never the PBX.
-# Inputs are officepulse's DB_* settings plus aida-admin-runtime's reader
+# Inputs are aida-pbx's DB_* settings plus aida-pbx-reader's
 # DB_NAME/DB_USER/DB_PASSWORD, passed as READER_DB_* adapter inputs. See docs/DB_USERS.md.
 set +x
 set -euo pipefail
@@ -17,7 +17,7 @@ literal() { local value=${1//\\/\\\\}; printf "'%s'" "${value//\'/\'\'}"; }
 : "${DB_NAME:?DB_NAME is required}"
 : "${DB_USER:?DB_USER is required}"
 : "${DB_PASSWORD:?DB_PASSWORD is required}"
-# Adapter inputs for app=aida-admin-runtime's DB_USER/DB_PASSWORD/DB_NAME.
+# Adapter inputs for app=aida-pbx-reader's DB_USER/DB_PASSWORD/DB_NAME.
 # These are script arguments in the environment, not additional settingKeys.
 : "${READER_DB_USER:?READER_DB_USER is required}"
 : "${READER_DB_PASSWORD:?READER_DB_PASSWORD is required}"
@@ -36,7 +36,7 @@ identifier "$RUNTIME_USER" DB_USER 32
 identifier "$READER_USER" READER_DB_USER 32
 identifier "$ADMIN" MYSQL_ADMIN_USER 32
 port "$PORT"
-[[ $READER_DB_NAME == "$DATABASE" ]] || die 'Reader DB_NAME and officepulse DB_NAME must name the same database'
+[[ $READER_DB_NAME == "$DATABASE" ]] || die 'Reader DB_NAME and aida-pbx DB_NAME must name the same database'
 [[ $RUNTIME_USER != "$READER_USER" && $RUNTIME_USER != "$ADMIN" && $READER_USER != "$ADMIN" ]] || die 'Runtime, reader and admin accounts must be distinct'
 case "$RUNTIME_USER:$READER_USER" in root:*|*:root|mysql.*) die 'System accounts cannot be application accounts';; esac
 

@@ -42,8 +42,10 @@ Read the [PBX inventory contract](docs/PBX_SOURCE_OF_TRUTH.md),
 ## Configuration
 
 `NOCODB_BASE_URL` and `NOCODB_API_TOKEN` bootstrap `PlatformConfig.cfg_tbl_Setting`.
-Nonblank environment overrides take precedence over `officepulse`, `aida`, then
-`*` scopes. Restart after changing settings. OfficePulse no longer reads
+Nonblank environment overrides take precedence over `aida-pbx`, `aida`, then
+`*` scopes. `aida-pbx` (the bridge between OfficePulse's Asterisk and Aida's
+LiveKit agent) was called `officepulse`; rows left under that name stop startup
+until AidaPlatformDB's `install.sh` moves them. Restart after changing settings. OfficePulse no longer reads
 AidaAdmin's retired extension, ring-group, DID or device tables. Opt-in native
 admission reads the persisted per-context/DID profile assignments
 (`aida_tbl_ProfileAssignment`, managed through AidaAdmin) for a pinned call snapshot.
@@ -53,7 +55,7 @@ admission reads the persisted per-context/DID profile assignments
 | `HTTP_PORT` / `PUBLIC_HTTP_PORT` / `HTTP_BIND` | 8085 / 8086 / 0.0.0.0 | Private API and health/callback listener |
 | `TRUSTED_SERVER_CIDRS` / `TRUSTED_PROXY_CIDRS` | Required in production / empty | Separate service and proxy trust |
 | `HTTP_RATE_LIMIT_PER_MINUTE` / `HTTP_MAX_BODY_BYTES` | 300 / 65536 | HTTP limits |
-| `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD` | Explicit production values / optional port 3306 | Runtime database; app=officepulse DB_* rows are seeded by AidaPlatformDB setup |
+| `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD` | Explicit production values / optional port 3306 | Runtime database; app=aida-pbx DB_* rows are seeded by AidaPlatformDB setup |
 | `DB_NAME` | Explicit in production; aidacalls_db in development | Only canonical runtime schema; migrations reject the external asterisk schema |
 | `NOCODB_BASE_URL`, `NOCODB_API_TOKEN`, `NOCODB_BASE_NAME`, `NOCODB_TIMEOUT_MS` | Required / PlatformConfig / 4000 | Scoped settings discovery |
 | `PBX_INVENTORY_ENABLED` | false | Enable private vendor configuration reads |
@@ -112,7 +114,7 @@ never include the setting value or NocoDB credentials.
 | Setting | Default | Purpose |
 | --- | --- | --- |
 | `PLATFORM_CONFIG_MODE` | PlatformConfig | `environment` is the retained environment-only mode: NocoDB is not read and every setting, including `ID_BASE_URL`, comes from the process environment |
-| `ID_BASE_URL` | resolved from `identity/APP_BASE_URL` | Retired as an input in PlatformConfig mode: a nonblank value in the environment or in any `*`/`aida`/`officepulse` row fails startup; set it by hand only in environment-only mode |
+| `ID_BASE_URL` | resolved from `identity/APP_BASE_URL` | Retired as an input in PlatformConfig mode: a nonblank value in the environment or in any `*`/`aida`/`aida-pbx` row fails startup; set it by hand only in environment-only mode |
 | `OPS_IDENTITY_URL` | the resolved Identity origin | An explicit value keeps precedence; see `docs/OPERATIONS.md` |
 
 The record is read once at startup; a central change takes effect at the next
@@ -171,7 +173,7 @@ hidden LiveKit observation, takeover, trust assumptions and deployment checks.
 Attached handsets are listed in the Operations UI under the selected context.
 
 Set `ENVIRONMENT_NAME` (`dev`, `staging`, `prod`) in PlatformConfig scope `*` and
-`OFFICEPULSE_INSTANCE_ID` in scope `officepulse`. Health/readiness return both.
+`OFFICEPULSE_INSTANCE_ID` in scope `aida-pbx`. Health/readiness return both.
 The instance must end with `-${ENVIRONMENT_NAME}` and may not contain
 `preview`, `copy`, `temp`, `tmp`, `backup`, or `test` (case-insensitive). Missing
 environment preserves legacy behavior with a startup warning. A multi-PBX host
@@ -185,4 +187,4 @@ remove its env override, and restart. Do not rename historical call records.
 Verify `agent-config-cache` has at least one cached assignment and native admission
 is ready; then validate a real admitted call. Bootstrap credentials alone should
 remain in the service env file (`NOCODB_BASE_URL`, `NOCODB_API_TOKEN`); move other
-host settings into `officepulse` scope, with secrets marked `bSecret=1`.
+host settings into `aida-pbx` scope, with secrets marked `bSecret=1`.

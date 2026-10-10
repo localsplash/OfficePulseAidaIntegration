@@ -22,7 +22,7 @@ reads those business profiles; only `cfg_tbl_Setting` is a startup dependency.
 
 ## Integration runtime migration
 
-`004_remove_retired_pbx.sql` runs only against configured `aidacalls_db` or a
+`004_remove_retired_pbx.sql` runs only against configured `aida_pbx_db` (formerly `aidacalls_db`) or a
 disposable test schema after the existing checksum-verified migrations. Historical
 migration files stay unchanged; rerunning startup does not recreate dropped tables.
 

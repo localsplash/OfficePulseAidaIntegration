@@ -3,10 +3,17 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import type { RuntimeMysqlConfig } from './mysqlRuntimeStore.js';
 
+/**
+ * The runtime database's name. `aidacalls_db` is its name before
+ * scripts/rename-database.sh moves it; both are accepted until every
+ * environment has been renamed.
+ */
+export const RUNTIME_DATABASES = ['aida_pbx_db', 'aidacalls_db'] as const;
+
 /** Canonical runtime migrations, including explicit removal of retired Dev bookkeeping. */
 export async function migrateRuntime(config: RuntimeMysqlConfig): Promise<void> {
-  if (config.database !== 'aidacalls_db' && !/^aida_[a-z0-9_]+_test$/.test(config.database)) {
-    throw new Error('runtime migrations may only target aidacalls_db or a disposable aida_*_test schema');
+  if (!(RUNTIME_DATABASES as readonly string[]).includes(config.database) && !/^aida_[a-z0-9_]+_test$/.test(config.database)) {
+    throw new Error(`runtime migrations may only target ${RUNTIME_DATABASES.join(' or ')}, or a disposable aida_*_test schema`);
   }
   const connection = await mysql.createConnection(config);
   try {

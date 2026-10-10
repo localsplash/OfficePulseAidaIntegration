@@ -58,7 +58,7 @@ admission reads the persisted per-context/DID profile assignments
 | `TRUSTED_SERVER_CIDRS` / `TRUSTED_PROXY_CIDRS` | Required in production / empty | Separate service and proxy trust |
 | `HTTP_RATE_LIMIT_PER_MINUTE` / `HTTP_MAX_BODY_BYTES` | 300 / 65536 | HTTP limits |
 | `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD` | Explicit production values / optional port 3306 | Runtime database; app=aida-pbx DB_* rows are seeded by AidaPlatformDB setup |
-| `DB_NAME` | Explicit in production; aidacalls_db in development | Only canonical runtime schema; migrations reject the external asterisk schema |
+| `DB_NAME` | Explicit in production; aida_pbx_db in development | Only canonical runtime schema; migrations reject the external asterisk schema |
 | `NOCODB_BASE_URL`, `NOCODB_API_TOKEN`, `NOCODB_BASE_NAME`, `NOCODB_TIMEOUT_MS` | Required / PlatformConfig / 4000 | Scoped settings discovery |
 | `PBX_INVENTORY_ENABLED` | false | Enable private vendor configuration reads |
 | `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE` | Explicit production values / port 3306 | External OfficePulse vendor database coordinates |
@@ -93,10 +93,11 @@ Admin shows inventory unavailable while business administration and integration
 history remain usable.
 
 Provision the platform database accounts with [`scripts/db-users.sh`](scripts/db-users.sh)
-before startup. It uses the existing runtime settings, creates `aida_runtime`
+before startup. It uses the existing runtime settings, creates `aida_pbx_app`
 and converges its migration grants on every run. AidaAdmin has no login on this
 database; it reads runtime state through the private API. See [database account ownership and operator instructions](docs/DB_USERS.md),
-including the separate PBX account templates. The old runtime `grants.sql` is retired.
+including the separate PBX account templates. Environments created before the
+rename move from `aidacalls_db`/`aida_runtime` with [the one-time rename](docs/RENAME_DATABASE.md). The old runtime `grants.sql` is retired.
 
 ### Identity base URL
 

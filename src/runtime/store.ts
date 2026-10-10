@@ -2,7 +2,7 @@
 export type DestinationType = string;
 
 /**
- * The `aidacalls_db` runtime database this service exclusively writes
+ * The `aida_pbx_db` runtime database this service exclusively writes
  * (issue #9). Deliberately has no transcript surface.
  */
 

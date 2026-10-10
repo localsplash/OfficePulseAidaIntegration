@@ -23,7 +23,8 @@ RUNTIME_USER=$DB_USER
 ADMIN=${MYSQL_ADMIN_USER:-root}
 : "${MYSQL_ADMIN_PASSWORD:?MYSQL_ADMIN_PASSWORD is required}"
 identifier "$DATABASE" DB_NAME 64
-[[ $DATABASE == aidacalls_db || $DATABASE =~ ^aida_[a-z0-9_]+_test$ ]] || die 'Database must be aidacalls_db or a disposable aida_*_test schema'
+# aidacalls_db is the database's name before scripts/rename-database.sh.
+[[ $DATABASE == aida_pbx_db || $DATABASE == aidacalls_db || $DATABASE =~ ^aida_[a-z0-9_]+_test$ ]] || die 'Database must be aida_pbx_db (formerly aidacalls_db) or a disposable aida_*_test schema'
 identifier "$RUNTIME_USER" DB_USER 32
 identifier "$ADMIN" MYSQL_ADMIN_USER 32
 port "$PORT"

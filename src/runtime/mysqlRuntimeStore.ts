@@ -130,7 +130,7 @@ function toSession(row: CallSessionRow): CallSessionRecord {
 
 /**
  * MySQL implementation of the runtime store. Prepared statements only; the
- * connecting account needs rights on `aidacalls_db` alone (see
+ * connecting account needs rights on `aida_pbx_db` alone (see
  * scripts/db-users.sh and docs/DB_USERS.md).
  */
 export class MysqlRuntimeStore implements RuntimeStore, RuntimeQueries {

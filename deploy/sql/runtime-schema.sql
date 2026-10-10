@@ -1,4 +1,4 @@
--- `aida_officepulse`: the runtime database OfficePulseAidaIntegration owns
+-- `aida_officepulse`: the runtime database AidaPbx owns
 -- and is the sole writer of (issue #9). AidaAdmin may READ it through a
 -- read-only account; commands remain HTTP actions, never table writes.
 --

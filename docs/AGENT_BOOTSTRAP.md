@@ -93,7 +93,7 @@ mode the startup settings reader resolves it from the Identity application's own
 `cfg_tbl_Setting` record (`app = identity`, `settingKey = APP_BASE_URL`), validates
 it as an HTTPS origin and passes it to the agent configuration as `ID_BASE_URL`.
 Never set `ID_BASE_URL` by hand in that mode: a nonblank value in the environment
-or in any `*`/`aida`/`officepulse` scope row fails startup as a retired override,
+or in any `*`/`aida`/`aida-pbx` scope row fails startup as a retired override,
 so a stale copy cannot point the tenant check at another environment. A missing
 or blank record means admission does not start and the error names
 `identity/APP_BASE_URL`; duplicate or malformed records and a NocoDB failure

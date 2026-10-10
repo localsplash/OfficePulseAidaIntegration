@@ -20,6 +20,7 @@ jobs:
           --health-interval=5s --health-timeout=5s --health-retries=30
     env:
       TEST_DB_USERS_MYSQL_URL: mysql://root:db-users-test@127.0.0.1:3306/aida_db_users_test
+      TEST_RUNTIME_QUERIES_MYSQL_URL: mysql://root:db-users-test@127.0.0.1:3306/aida_runtime_queries_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

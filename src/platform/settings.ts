@@ -14,9 +14,18 @@ async function readEnvironment(env: NodeJS.ProcessEnv): Promise<NodeJS.ProcessEn
   return resolvePlatformSettings(env, api);
 }
 
+/** This service's own scope: the bridge between the OfficePulse PBX and Aida's LiveKit agent. */
+export const SETTINGS_SCOPE = 'aida-pbx';
+/** Former name of SETTINGS_SCOPE; AidaPlatformDB's installer moves its rows in place. */
+const RETIRED_SCOPE = 'officepulse';
+
 export async function resolvePlatformSettings(env: NodeJS.ProcessEnv, api: NocoReadApi): Promise<NodeJS.ProcessEnv> {
+  // Rows left under the old name would otherwise be silently ignored.
+  if ((await api.listRecords('cfg_tbl_Setting', [{ field: 'app', op: 'eq', value: RETIRED_SCOPE }], 1)).length) {
+    throw new Error(`PlatformConfig scope ${RETIRED_SCOPE} was renamed ${SETTINGS_SCOPE}: run AidaPlatformDB's install.sh (any phase) to move its rows`);
+  }
   const merged: NodeJS.ProcessEnv = {};
-  for (const scope of ['*', 'aida', 'officepulse']) {
+  for (const scope of ['*', 'aida', SETTINGS_SCOPE]) {
     const rows = await api.listRecords('cfg_tbl_Setting', [{ field: 'app', op: 'eq', value: scope }], 1000);
     const seen = new Set<string>();
     for (const row of rows) {
@@ -24,7 +33,7 @@ export async function resolvePlatformSettings(env: NodeJS.ProcessEnv, api: NocoR
       if (!key || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new Error('invalid PlatformConfig setting key');
       if (seen.has(key)) throw new Error(`duplicate PlatformConfig setting ${scope}/${key}`);
       seen.add(key);
-      if (['DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER', 'DB_PASSWORD'].includes(key) && scope !== 'officepulse') continue;
+      if (['DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER', 'DB_PASSWORD'].includes(key) && scope !== SETTINGS_SCOPE) continue;
       const raw = String(row.settingValue ?? '');
       if (raw.trim()) merged[key] = key === 'DB_PASSWORD' ? raw : raw.trim();
     }

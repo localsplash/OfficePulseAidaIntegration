@@ -1,4 +1,6 @@
-# OfficePulseAidaIntegration
+# AidaPbx
+
+The bridge between OfficePulse's Asterisk and Aida's LiveKit agent (PlatformConfig scope `aida-pbx`). This repository was called OfficePulseAidaIntegration.
 
 The canonical development service exposes private Asterisk endpoint/queue
 inventory, opt-in POC provisioning, and integration call diagnostics. Asterisk/OfficePulse is
